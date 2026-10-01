@@ -144,16 +144,16 @@ DOCINTEL_KEY=
 
 ---
 
-## Roadmap (10 weeks)
+## Roadmap (5 weeks)
 
 | Weeks | Focus | Done when |
 |---|---|---|
 | 1 | Setup: Foundry project, models, Document Intelligence, Neo4j | Everyone can run Neo4j and call a Foundry model |
-| 2–3 | Learn Neo4j + Foundry, build a plain RAG agent | The agent answers with sources |
-| 4 | Test questions + graph design | 20–30 test questions and the graph model agreed |
-| 5–6 | Build the knowledge graph | One command builds the graph |
-| 7–8 | GraphRAG agent: graph tools + comparison | GraphRAG beats plain RAG on comparison and list questions |
-| 9–10 | Chat UI + final demo | Live demo works |
+| 2 | Learn Neo4j + Foundry, build a plain RAG agent | The agent answers with sources |
+| 3 | Test questions + graph design | 20–30 test questions and the graph model agreed |
+| 3 | Build the knowledge graph | One command builds the graph |
+| 4 | GraphRAG agent: graph tools + comparison | GraphRAG beats plain RAG on comparison and list questions |
+| 5 | Chat UI + final demo | Live demo works |
 
 Details for each week are in [`docs/PLAN.md`](docs/PLAN.md#3-work-plan).
 
