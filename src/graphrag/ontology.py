@@ -9,7 +9,6 @@ NODE_TYPES = frozenset({
     "Role",
     "Skill",
     "Policy",
-    "ApplicabilityGroup",
     "Plan",
     "Service",
     "Document",
@@ -22,7 +21,6 @@ RELATIONSHIP_TYPES = frozenset({
     "OFFERS",
     "COVERS",
     "EXCLUDES",
-    "MEMBER_OF",
     "HAS_ROLE",
     "BELONGS_TO",
     "REQUIRES",
@@ -39,14 +37,18 @@ ALLOWED_RELATIONSHIPS = frozenset({
     ("Role", "BELONGS_TO", "Department"),
     ("Role", "REQUIRES", "Skill"),
     ("Employee", "HAS_ROLE", "Role"),
-    ("Employee", "MEMBER_OF", "ApplicabilityGroup"),
-    ("Policy", "APPLIES_TO", "ApplicabilityGroup"),
+    ("Policy", "APPLIES_TO", "Role"),
     ("Plan", "COVERS", "Service"),
     ("Plan", "EXCLUDES", "Service"),
     ("Document", "HAS_CHUNK", "Chunk"),
+
+    # Chunk-to-entity relationships
     ("Chunk", "MENTIONS", "Role"),
     ("Chunk", "MENTIONS", "Policy"),
     ("Chunk", "MENTIONS", "Plan"),
+    ("Chunk", "MENTIONS", "Department"),
+    ("Chunk", "MENTIONS", "Skill"),
+    ("Chunk", "MENTIONS", "Service"),
 })
 
 # Display ontology information
