@@ -53,54 +53,76 @@ def extract_roles(markdown):
 
         content = markdown[start:end].strip()
 
+        # Page number where the role begins
+        start_page = markdown[:match.start()].count(
+            "<!-- PageBreak -->"
+        ) + 1
+
         roles.append({
             "role": role_name,
             "content": content,
+            "start_page": start_page,
         })
 
     return roles
 
 
+
 def create_chunks(roles):
     chunks = []
+    page_marker = "<!-- PageBreak -->"
 
     for role in roles:
         role_name = role["role"]
+        start_page = role["start_page"]
 
-        # Remove page markers from embedding text.
-        content = role["content"].replace(
-            "<!-- PageBreak -->", ""
-        ).strip()
+        # Keep page markers temporarily to track source pages.
+        content = role["content"]
+        page_parts = content.split(page_marker)
 
-        # Keep the role heading in every chunk.
+        # Tokenize each page separately, preserving page metadata.
+        token_pages = []
+        for page_offset, page_text in enumerate(page_parts):
+            page_number = start_page + page_offset
+            tokens = encoder.encode(page_text.strip())
+
+            token_pages.extend(
+                (token, page_number) for token in tokens
+            )
+
         prefix = f"Role: {role_name}\n\n"
         available_tokens = MAX_TOKENS - token_count(prefix)
 
         if available_tokens <= OVERLAP_TOKENS:
             raise ValueError("Role prefix is too long.")
 
-        tokens = encoder.encode(content)
         step = available_tokens - OVERLAP_TOKENS
 
-        for start in range(0, len(tokens), step):
-            part = encoder.decode(
-                tokens[start:start + available_tokens]
-            )
+        for start in range(0, len(token_pages), step):
+            chunk_data = token_pages[start:start + available_tokens]
 
-            text = prefix + part
+            if not chunk_data:
+                break
+
+            chunk_tokens = [token for token, _ in chunk_data]
+            pages = sorted(set(page for _, page in chunk_data))
+
+            text = prefix + encoder.decode(chunk_tokens)
 
             chunks.append({
                 "chunk_id": f"role_library_{len(chunks) + 1:03d}",
                 "source_document": SOURCE_DOCUMENT,
                 "role": role_name,
+                "pages": pages,
                 "text": text,
                 "token_count": token_count(text),
             })
 
-            if start + available_tokens >= len(tokens):
+            if start + available_tokens >= len(token_pages):
                 break
 
     return chunks
+
 
 
 def main():

@@ -1,82 +1,101 @@
-
+import hashlib
+import os
+from io import BytesIO
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pypdf import PdfReader, PdfWriter
-from io import BytesIO
-
 from azure.identity import DefaultAzureCredential
 from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import DocumentContentFormat
 
 
-ENDPOINT = "https://graphrag.cognitiveservices.azure.com/"
+load_dotenv()
+ENDPOINT = os.environ["DOCINTEL_ENDPOINT"]
 
 PDF_PATH = Path("role_library.pdf")
 OUTPUT_PATH = Path("data/markdown/role_library.md")
+CACHE_DIR = Path("data/cache/document_intelligence")
 
 BATCH_SIZE = 2
+MODEL_ID = "prebuilt-layout"
 
 
 def main():
     if not PDF_PATH.is_file():
         raise FileNotFoundError(f"PDF not found: {PDF_PATH}")
 
+    pdf_hash = hashlib.sha256(PDF_PATH.read_bytes()).hexdigest()
     reader = PdfReader(str(PDF_PATH))
     total_pages = len(reader.pages)
 
     print(f"Total PDF pages: {total_pages}")
 
-    credential = DefaultAzureCredential()
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    markdown_parts = []
+
+    credential = None
 
     try:
-        client = DocumentIntelligenceClient(
-            endpoint=ENDPOINT,
-            credential=credential,
-        )
-
-        markdown_parts = []
-
         for start in range(0, total_pages, BATCH_SIZE):
             end = min(start + BATCH_SIZE, total_pages)
 
-            print(f"Processing pages {start + 1}-{end}...")
+            cache_key = hashlib.sha256(
+                f"{pdf_hash}:{start}:{end}:{MODEL_ID}:markdown:{ENDPOINT}".encode()
+            ).hexdigest()
+            cache_path = CACHE_DIR / f"{cache_key}.md"
 
-            writer = PdfWriter()
+            if cache_path.is_file():
+                extracted_text = cache_path.read_text(encoding="utf-8")
+                print(f"Using cached pages {start + 1}-{end}")
+            else:
+                print(f"Processing pages {start + 1}-{end}...")
 
-            for page_number in range(start, end):
-                writer.add_page(reader.pages[page_number])
+                if credential is None:
+                    credential = DefaultAzureCredential()
+                    client = DocumentIntelligenceClient(
+                        endpoint=ENDPOINT,
+                        credential=credential,
+                    )
 
-            pdf_buffer = BytesIO()
-            writer.write(pdf_buffer)
-            pdf_buffer.seek(0)
+                writer = PdfWriter()
+                for page_number in range(start, end):
+                    writer.add_page(reader.pages[page_number])
 
-            poller = client.begin_analyze_document(
-                "prebuilt-layout",
-                body=pdf_buffer,
-                output_content_format=DocumentContentFormat.MARKDOWN,
-            )
+                pdf_buffer = BytesIO()
+                writer.write(pdf_buffer)
+                pdf_buffer.seek(0)
 
-            result = poller.result()
+                poller = client.begin_analyze_document(
+                    MODEL_ID,
+                    body=pdf_buffer,
+                    output_content_format=DocumentContentFormat.MARKDOWN,
+                )
 
-            extracted_text = (result.content or "").strip()
+                result = poller.result()
+                extracted_text = (result.content or "").strip()
 
-            if not extracted_text or not any(
+                if not extracted_text or not any(
+                    char.isalnum() for char in extracted_text
+                ):
+                    raise RuntimeError(
+                        f"No meaningful content extracted from pages "
+                        f"{start + 1}-{end}"
+                    )
+
+                cache_path.write_text(extracted_text, encoding="utf-8")
+                print(f"Cached pages {start + 1}-{end}")
+
+            if not extracted_text.strip() or not any(
                 char.isalnum() for char in extracted_text
             ):
                 raise RuntimeError(
-                    f"No meaningful content extracted from pages "
-                    f"{start + 1}-{end}"
+                    f"Invalid cached content for pages {start + 1}-{end}"
                 )
-
-            print(
-                f"Extracted {len(extracted_text)} characters "
-                f"from pages {start + 1}-{end}"
-            )
 
             markdown_parts.append(extracted_text)
 
         OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-
         OUTPUT_PATH.write_text(
             "\n\n".join(markdown_parts),
             encoding="utf-8",
@@ -87,7 +106,8 @@ def main():
         print(f"Markdown saved to: {OUTPUT_PATH.resolve()}")
 
     finally:
-        credential.close()
+        if credential is not None:
+            credential.close()
 
 
 if __name__ == "__main__":
