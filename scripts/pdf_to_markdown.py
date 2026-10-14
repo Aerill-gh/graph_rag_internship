@@ -4,7 +4,7 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 from io import BytesIO
 
-from azure.identity import AzureCliCredential
+from azure.identity import DefaultAzureCredential
 from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import DocumentContentFormat
 
@@ -26,7 +26,7 @@ def main():
 
     print(f"Total PDF pages: {total_pages}")
 
-    credential = AzureCliCredential()
+    credential = DefaultAzureCredential()
 
     try:
         client = DocumentIntelligenceClient(
