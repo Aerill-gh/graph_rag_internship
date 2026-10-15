@@ -19,6 +19,7 @@ CACHE_DIR = Path("data/cache/document_intelligence")
 
 BATCH_SIZE = 2
 MODEL_ID = "prebuilt-layout"
+PAGE_BREAK = "<!-- PageBreak -->"
 
 
 def main():
@@ -39,6 +40,7 @@ def main():
     try:
         for start in range(0, total_pages, BATCH_SIZE):
             end = min(start + BATCH_SIZE, total_pages)
+            batch_pages = end - start
 
             cache_key = hashlib.sha256(
                 f"{pdf_hash}:{start}:{end}:{MODEL_ID}:markdown:{ENDPOINT}".encode()
@@ -93,16 +95,41 @@ def main():
                     f"Invalid cached content for pages {start + 1}-{end}"
                 )
 
+            # Verify page breaks inside each batch.
+            expected_breaks = batch_pages - 1
+            actual_breaks = extracted_text.count(PAGE_BREAK)
+
+            if actual_breaks != expected_breaks:
+                raise RuntimeError(
+                    f"Page-break mismatch for pages {start + 1}-{end}: "
+                    f"expected {expected_breaks}, found {actual_breaks}. "
+                    f"Check Document Intelligence Markdown output."
+                )
+
             markdown_parts.append(extracted_text)
 
-        OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        OUTPUT_PATH.write_text(
-            "\n\n".join(markdown_parts),
-            encoding="utf-8",
+        # Preserve page boundaries between batches.
+        markdown = (
+            f"\n\n{PAGE_BREAK}\n\n".join(markdown_parts)
         )
+
+        # A PDF with N pages should have N-1 page breaks.
+        expected_total_breaks = total_pages - 1
+        actual_total_breaks = markdown.count(PAGE_BREAK)
+
+        if actual_total_breaks != expected_total_breaks:
+            raise RuntimeError(
+                f"Total page-break mismatch: "
+                f"expected {expected_total_breaks}, "
+                f"found {actual_total_breaks}"
+            )
+
+        OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        OUTPUT_PATH.write_text(markdown, encoding="utf-8")
 
         print("\nConversion completed successfully!")
         print(f"Processed pages: {total_pages}")
+        print(f"Page-break markers: {actual_total_breaks}")
         print(f"Markdown saved to: {OUTPUT_PATH.resolve()}")
 
     finally:
