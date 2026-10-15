@@ -6,14 +6,21 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pypdf import PdfReader, PdfWriter
 from azure.identity import DefaultAzureCredential
+from azure.storage.blob import BlobClient
 from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import DocumentContentFormat
 
 
 load_dotenv()
-ENDPOINT = os.environ["DOCINTEL_ENDPOINT"]
+ENDPOINT = os.getenv(
+    "DOCINTEL_ENDPOINT", "https://graphrag.cognitiveservices.azure.com/"
+)
 
-PDF_PATH = Path("role_library.pdf")
+STORAGE_ACCOUNT_NAME = "aidepartmentstorage"
+STORAGE_ACCOUNT_URL = f"https://{STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
+CONTAINER_NAME = "docs"
+BLOB_NAME = "role_library.pdf"
+
 OUTPUT_PATH = Path("data/markdown/role_library.md")
 CACHE_DIR = Path("data/cache/document_intelligence")
 
@@ -23,21 +30,27 @@ PAGE_BREAK = "<!-- PageBreak -->"
 
 
 def main():
-    if not PDF_PATH.is_file():
-        raise FileNotFoundError(f"PDF not found: {PDF_PATH}")
-
-    pdf_hash = hashlib.sha256(PDF_PATH.read_bytes()).hexdigest()
-    reader = PdfReader(str(PDF_PATH))
-    total_pages = len(reader.pages)
-
-    print(f"Total PDF pages: {total_pages}")
-
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    markdown_parts = []
-
-    credential = None
+    credential = DefaultAzureCredential()
+    client = None
 
     try:
+        with BlobClient(
+            account_url=STORAGE_ACCOUNT_URL,
+            container_name=CONTAINER_NAME,
+            blob_name=BLOB_NAME,
+            credential=credential,
+        ) as blob_client:
+            pdf_bytes = blob_client.download_blob().readall()
+
+        pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
+        reader = PdfReader(BytesIO(pdf_bytes))
+        total_pages = len(reader.pages)
+
+        print(f"Total PDF pages: {total_pages}")
+
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        markdown_parts = []
+
         for start in range(0, total_pages, BATCH_SIZE):
             end = min(start + BATCH_SIZE, total_pages)
             batch_pages = end - start
@@ -53,8 +66,7 @@ def main():
             else:
                 print(f"Processing pages {start + 1}-{end}...")
 
-                if credential is None:
-                    credential = DefaultAzureCredential()
+                if client is None:
                     client = DocumentIntelligenceClient(
                         endpoint=ENDPOINT,
                         credential=credential,
@@ -133,8 +145,9 @@ def main():
         print(f"Markdown saved to: {OUTPUT_PATH.resolve()}")
 
     finally:
-        if credential is not None:
-            credential.close()
+        if client is not None:
+            client.close()
+        credential.close()
 
 
 if __name__ == "__main__":
