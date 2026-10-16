@@ -1,4 +1,4 @@
-from src.graphrag.ontology import (
+from graphrag.ontology import (
     NODE_TYPES,
     RELATIONSHIP_TYPES,
     ALLOWED_RELATIONSHIPS,

@@ -4,29 +4,31 @@
 # Node types
 NODE_TYPES = frozenset({
     "Company",
-    "Department",
-    "Employee",
-    "Role",
-    "Skill",
-    "Policy",
-    "Plan",
-    "Service",
     "Document",
     "Chunk",
+    "Employee",
+    "Role",
+    "Department",
+    "Skill",
+    "Policy",
+    "ApplicabilityGroup",
+    "Plan",
+    "Service",
 })
 
 # Relationship types
 RELATIONSHIP_TYPES = frozenset({
     "HAS_DEPARTMENT",
     "OFFERS",
+    "HAS_CHUNK",
+    "MENTIONS",
+    "BELONGS_TO",
+    "REQUIRES",
+    "APPLIES_TO",
+    "APPLIES_ON",
     "COVERS",
     "EXCLUDES",
     "HAS_ROLE",
-    "BELONGS_TO",
-    "REQUIRES",
-    "HAS_CHUNK",
-    "MENTIONS",
-    "APPLIES_TO",
 })
 
 # Allowed relationship patterns
@@ -34,21 +36,24 @@ RELATIONSHIP_TYPES = frozenset({
 ALLOWED_RELATIONSHIPS = frozenset({
     ("Company", "HAS_DEPARTMENT", "Department"),
     ("Company", "OFFERS", "Plan"),
-    ("Role", "BELONGS_TO", "Department"),
-    ("Role", "REQUIRES", "Skill"),
-    ("Employee", "HAS_ROLE", "Role"),
-    ("Policy", "APPLIES_TO", "Role"),
-    ("Plan", "COVERS", "Service"),
-    ("Plan", "EXCLUDES", "Service"),
     ("Document", "HAS_CHUNK", "Chunk"),
-
-    # Chunk-to-entity relationships
     ("Chunk", "MENTIONS", "Role"),
     ("Chunk", "MENTIONS", "Policy"),
-    ("Chunk", "MENTIONS", "Plan"),
     ("Chunk", "MENTIONS", "Department"),
     ("Chunk", "MENTIONS", "Skill"),
+    ("Chunk", "MENTIONS", "Plan"),
     ("Chunk", "MENTIONS", "Service"),
+    ("Chunk", "MENTIONS", "Company"),
+    ("Chunk", "MENTIONS", "Employee"),
+    ("Chunk", "MENTIONS", "ApplicabilityGroup"),
+    ("Role", "BELONGS_TO", "Department"),
+    ("Role", "REQUIRES", "Skill"),
+    ("Policy", "APPLIES_TO", "Role"),
+    ("Policy", "APPLIES_TO", "ApplicabilityGroup"),
+    ("Employee", "APPLIES_ON", "ApplicabilityGroup"),
+    ("Employee", "HAS_ROLE", "Role"),
+    ("Plan", "COVERS", "Service"),
+    ("Plan", "EXCLUDES", "Service"),
 })
 
 # Display ontology information
