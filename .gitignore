@@ -1,5 +1,11 @@
 # Secrets
 .env
+.env.example
+
+# Local project configuration
+pyproject.toml
+src/graphrag/__init__.py
+src/graphrag/config.py
 
 # Data (downloaded or generated, not versioned)
 data/raw/
