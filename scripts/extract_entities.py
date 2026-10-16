@@ -1,10 +1,10 @@
 import hashlib
 import json
-import os
 from pathlib import Path
 
-from dotenv import load_dotenv
 from openai import OpenAI
+
+from graphrag.config import settings
 
 
 INPUT_PATH = Path("data/chunks/role_library_chunks.json")
@@ -14,7 +14,7 @@ CACHE_DIR = Path("data/cache/entity_extraction")
 SYSTEM_PROMPT = """
 You are an entity extraction assistant for the Zava GraphRAG project.
 
-Extract information strictly from the provided document chunk.
+Extract information strictly from the provided document chunk and figure captions.
 
 Follow the Zava ontology:
 - Role
@@ -37,14 +37,19 @@ Rules:
    Do not infer skills from the Responsibilities section.
 4. Extract the department only if explicitly stated.
 5. Do not infer a department from the role title.
-6. Preserve the role name provided in the chunk.
-7. Return valid JSON only.
+6. Include only roles whose names are explicitly stated in this chunk.
+7. Return an empty roles list when no role is explicitly identified.
+8. Return valid JSON only.
 
 JSON format:
 {
-  "role": "Role name",
-  "skills": ["Skill 1", "Skill 2"],
-  "department": null
+    "roles": [
+        {
+            "name": "Role name",
+            "skills": ["Skill 1", "Skill 2"],
+            "department": null
+        }
+    ]
 }
 """
 
@@ -55,41 +60,54 @@ MODEL_SETTINGS = {
 }
 
 
-def validate_result(result, chunk):
+def validate_result(result):
     if not isinstance(result, dict):
         raise ValueError("Extraction result must be a JSON object.")
 
-    if result.get("role") != chunk["role"]:
-        raise ValueError("Extracted role does not match the source.")
+    if not isinstance(result.get("roles"), list):
+        raise ValueError("Roles must be a list.")
 
-    if not isinstance(result.get("skills"), list):
-        raise ValueError("Skills must be a list.")
+    for role in result["roles"]:
+        if not isinstance(role, dict) or not isinstance(role.get("name"), str):
+            raise ValueError("Every role must have a string name.")
 
-    if not all(isinstance(skill, str) for skill in result["skills"]):
-        raise ValueError("Every skill must be a string.")
+        if not isinstance(role.get("skills"), list):
+            raise ValueError("Role skills must be a list.")
 
-    if result.get("department") is not None and not isinstance(
-        result["department"], str
-    ):
-        raise ValueError("Department must be a string or null.")
+        if not all(isinstance(skill, str) for skill in role["skills"]):
+            raise ValueError("Every skill must be a string.")
+
+        department = role.get("department")
+        if department is not None and not isinstance(department, str):
+            raise ValueError("Department must be a string or null.")
+
+
+def build_request_input(chunk):
+    pages = ", ".join(str(page) for page in chunk.get("pages", [])) or "unknown"
+    figure_captions = [
+        figure["caption"].strip()
+        for figure in chunk.get("figures", [])
+        if figure.get("caption", "").strip()
+    ]
+    figure_context = "\n".join(figure_captions) or "No figure captions available."
+
+    return (
+        "Extract entities from this document chunk and return a valid JSON object.\n"
+        f"Source document: {chunk['source_document']}\n"
+        f"Pages: {pages}\n\n"
+        f"Source text:\n{chunk['text']}\n\n"
+        f"Figure captions:\n{figure_context}"
+    )
 
 
 def extract_entities(chunk):
-    load_dotenv()
+    azure_openai = settings.azure_openai
 
-    deployment = os.environ["AZURE_OPENAI_DEPLOYMENT"]
-    base_url = os.environ["AZURE_OPENAI_BASE_URL"]
-
-    request_input = (
-        "Extract entities from the following document. "
-        "Return the result as a valid JSON object.\n\n"
-        f"Role: {chunk['role']}\n\n"
-        f"Source text:\n{chunk['text']}"
-    )
+    request_input = build_request_input(chunk)
 
     cache_input = {
-        "deployment": deployment,
-        "base_url": base_url,
+        "deployment": azure_openai.deployment,
+        "base_url": azure_openai.base_url,
         "system_prompt": SYSTEM_PROMPT,
         "input": request_input,
         "settings": MODEL_SETTINGS,
@@ -106,19 +124,19 @@ def extract_entities(chunk):
     cache_path = CACHE_DIR / f"{cache_key}.json"
 
     if cache_path.is_file():
-        print("Using cached GPT-4.1 extraction")
+        print("Using cached entity extraction")
         result = json.loads(cache_path.read_text(encoding="utf-8"))
-        validate_result(result, chunk)
+        validate_result(result)
         return result
 
     client = OpenAI(
-        api_key=os.environ["AZURE_OPENAI_API_KEY"],
-        base_url=base_url,
+        api_key=azure_openai.api_key,
+        base_url=azure_openai.base_url,
     )
 
     try:
         response = client.responses.create(
-            model=deployment,
+            model=azure_openai.deployment,
             instructions=SYSTEM_PROMPT,
             input=request_input,
             **MODEL_SETTINGS,
@@ -130,7 +148,7 @@ def extract_entities(chunk):
         raise ValueError("GPT-4.1 returned an empty response.")
 
     result = json.loads(response.output_text)
-    validate_result(result, chunk)
+    validate_result(result)
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(
@@ -138,7 +156,7 @@ def extract_entities(chunk):
         encoding="utf-8",
     )
 
-    print("GPT-4.1 extraction cached")
+    print("Entity extraction cached")
     return result
 
 
@@ -151,13 +169,15 @@ def main():
     # Test only the first chunk
     chunk = chunks[0]
 
-    print(f"Extracting: {chunk['role']}")
+    print(f"Extracting: {chunk['chunk_id']}")
 
     result = extract_entities(chunk)
 
     output = {
         "chunk_id": chunk["chunk_id"],
         "source_document": chunk["source_document"],
+        "pages": chunk.get("pages", []),
+        "figures": chunk.get("figures", []),
         "entities": result,
     }
 
