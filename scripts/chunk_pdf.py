@@ -1,7 +1,9 @@
+import re
+import argparse
 import hashlib
 import json
 from io import BytesIO
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import tiktoken
 from azure.ai.documentintelligence import DocumentIntelligenceClient
@@ -10,9 +12,10 @@ from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobClient
 from pypdf import PdfReader, PdfWriter
 
+from graphrag.embeddings import get_chunk_embedding
+from graphrag.neo4j_store import create_neo4j_driver, store_chunk
 from graphrag.config import settings
 
-OUTPUT_PATH = Path("data/chunks/role_library_chunks.json")
 CACHE_DIR = Path("data/cache/document_intelligence/chunking")
 FIGURE_DIR = CACHE_DIR / "figures"
 
@@ -98,7 +101,12 @@ def analyze_batch(client, reader, pdf_hash, start, end):
     return cached
 
 
-def create_chunks(pages, figures):
+def chunk_prefix_for_blob(blob_name):
+    blob_path = PurePosixPath(blob_name.replace("\\", "/").strip("/"))
+    return "_".join(blob_path.with_suffix("").parts)
+
+
+def create_chunks(pages, figures, source_document):
     figures_by_page = {}
     for figure in figures:
         figures_by_page.setdefault(figure["page"], []).append(figure)
@@ -120,16 +128,17 @@ def create_chunks(pages, figures):
         )
 
     if not page_tokens:
-        raise RuntimeError("Document Intelligence returned no chunkable text.")
+        raise RuntimeError("The document contains no chunkable text.")
 
     chunks = []
+    chunk_prefix = chunk_prefix_for_blob(source_document)
     step = MAX_TOKENS - OVERLAP_TOKENS
     for start in range(0, len(page_tokens), step):
         chunk_data = page_tokens[start:start + MAX_TOKENS]
         if not chunk_data:
             break
 
-        chunk_pages = sorted({page for _, page in chunk_data})
+        chunk_pages = sorted({page for _, page in chunk_data if page is not None})
         chunk_figures = [
             figure
             for figure in figures
@@ -138,8 +147,8 @@ def create_chunks(pages, figures):
         text = encoder.decode([token for token, _ in chunk_data])
 
         chunks.append({
-            "chunk_id": f"role_library_{len(chunks) + 1:03d}",
-            "source_document": settings.blob_name,
+            "chunk_id": f"{chunk_prefix}_{len(chunks) + 1:03d}",
+            "source_document": source_document,
             "pages": chunk_pages,
             "text": text,
             "token_count": len(encoder.encode(text)),
@@ -152,24 +161,14 @@ def create_chunks(pages, figures):
     return chunks
 
 
-def main():
-    credential = DefaultAzureCredential()
+def create_pdf_chunks(pdf_bytes, blob_name, credential):
+    pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
+    reader = PdfReader(BytesIO(pdf_bytes))
+    total_pages = len(reader.pages)
+    print(f"Total PDF pages: {total_pages}")
+
     client = None
-
     try:
-        with BlobClient(
-            account_url=settings.storage_account_url,
-            container_name=settings.blob_container,
-            blob_name=settings.blob_name,
-            credential=credential,
-        ) as blob_client:
-            pdf_bytes = blob_client.download_blob().readall()
-
-        pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
-        reader = PdfReader(BytesIO(pdf_bytes))
-        total_pages = len(reader.pages)
-        print(f"Total PDF pages: {total_pages}")
-
         client = DocumentIntelligenceClient(
             endpoint=settings.docintel_endpoint,
             credential=credential,
@@ -183,19 +182,97 @@ def main():
             pages.extend(batch["pages"])
             figures.extend(batch["figures"])
 
-        chunks = create_chunks(pages, figures)
-        OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        OUTPUT_PATH.write_text(
-            json.dumps(chunks, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-        print(f"Chunks created: {len(chunks)}")
-        print(f"Figures saved: {len(figures)}")
-        print(f"Output: {OUTPUT_PATH}")
+        return create_chunks(pages, figures, blob_name), len(figures)
     finally:
         if client is not None:
             client.close()
+
+
+def create_markdown_chunks(markdown_bytes, blob_name):
+    text = markdown_bytes.decode("utf-8-sig")
+    sections = re.split(r"(?=^## )", text, flags=re.MULTILINE)
+
+    chunks = []
+    chunk_prefix = chunk_prefix_for_blob(blob_name)
+
+    for section in sections:
+        section = section.strip()
+
+        if not section:
+            continue
+
+        chunks.append({
+            "chunk_id": f"{chunk_prefix}_{len(chunks) + 1:03d}",
+            "source_document": blob_name,
+            "pages": [],
+            "text": section,
+            "token_count": len(section.split()),
+            "figures": [],
+        })
+
+    return chunks
+
+
+def process_blob(blob_name, credential, session):
+    with BlobClient(
+        account_url=settings.storage_account_url,
+        container_name=settings.blob_container,
+        blob_name=blob_name,
+        credential=credential,
+    ) as blob_client:
+        document_bytes = blob_client.download_blob().readall()
+
+    suffix = PurePosixPath(blob_name.replace("\\", "/")).suffix.lower()
+
+    if suffix == ".pdf":
+        chunks, figure_count = create_pdf_chunks(
+            document_bytes,
+            blob_name,
+            credential,
+        )
+    elif suffix in {".md", ".markdown"}:
+        chunks = create_markdown_chunks(document_bytes, blob_name)
+        figure_count = 0
+    else:
+        raise ValueError(f"Unsupported document type for Blob: {blob_name}")
+
+    for chunk in chunks:
+        embedding = get_chunk_embedding(chunk)
+        store_chunk(session, chunk, embedding)
+
+    print(f"Chunks stored in Neo4j: {len(chunks)}")
+    print(f"Figures processed: {figure_count}")
+
+
+def build_argument_parser():
+    parser = argparse.ArgumentParser(
+        description="Chunk selected documents directly from Azure Blob Storage."
+    )
+    parser.add_argument(
+        "--blob",
+        dest="blob_names",
+        action="append",
+        metavar="BLOB_NAME",
+        help="Blob to process; repeat this option to process multiple documents.",
+    )
+    return parser
+
+
+def main(argv=None):
+    args = build_argument_parser().parse_args(argv)
+    blob_names = args.blob_names or [settings.blob_name]
+
+    credential = DefaultAzureCredential()
+
+    try:
+        with create_neo4j_driver() as driver:
+            driver.verify_connectivity()
+
+            with driver.session(database="neo4j") as session:
+                for blob_name in blob_names:
+                    print(f"Processing Blob: {blob_name}")
+                    process_blob(blob_name, credential, session)
+    finally:
         credential.close()
 
 

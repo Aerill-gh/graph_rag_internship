@@ -6,6 +6,7 @@ dependencies = [
     "azure-ai-documentintelligence>=1.0.2",
     "azure-identity>=1.26.0",
     "azure-storage-blob>=12.31.0",
+    "neo4j>=6.4.1",
     "openai>=3.29.0",
     "pypdf>=6.20.1",
     "python-dotenv>=1.2.4",
