@@ -251,33 +251,55 @@ def create_chunks(
     return chunks
 
 
-def create_pdf_chunks(
-    pdf_bytes: bytes, blob_name: str, credential: DefaultAzureCredential
-) -> tuple[list[ChunkData], int]:
+def parse_pdf_document(
+    pdf_bytes: bytes,
+    credential: DefaultAzureCredential,
+) -> BatchData:
+    """Extract PDF pages and figures using Azure Document Intelligence."""
     pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
     reader = PdfReader(BytesIO(pdf_bytes))
     total_pages = len(reader.pages)
+
     print(f"Total PDF pages: {total_pages}")
 
-    client = None
-    try:
-        client = DocumentIntelligenceClient(
-            endpoint=settings.docintel_endpoint,
-            credential=credential,
-        )
+    client = DocumentIntelligenceClient(
+        endpoint=settings.docintel_endpoint,
+        credential=credential,
+    )
 
-        pages = []
-        figures = []
+    try:
+        pages: list[PageData] = []
+        figures: list[FigureData] = []
+
         for start in range(0, total_pages, BATCH_SIZE):
             end = min(start + BATCH_SIZE, total_pages)
             batch = analyze_batch(client, reader, pdf_hash, start, end)
+
             pages.extend(batch["pages"])
             figures.extend(batch["figures"])
 
-        return create_chunks(pages, figures, blob_name), len(figures)
+        return {"pages": pages, "figures": figures}
     finally:
-        if client is not None:
-            client.close()
+        client.close()
+
+
+
+def create_pdf_chunks(
+    pdf_bytes: bytes,
+    blob_name: str,
+    credential: DefaultAzureCredential,
+) -> tuple[list[ChunkData], int]:
+    """Parse a PDF and split its content into chunks."""
+    parsed_data = parse_pdf_document(pdf_bytes, credential)
+
+    chunks = create_chunks(
+        parsed_data["pages"],
+        parsed_data["figures"],
+        blob_name,
+    )
+
+    return chunks, len(parsed_data["figures"])
+
 
 
 def create_markdown_chunks(markdown_bytes: bytes, blob_name: str) -> list[ChunkData]:
