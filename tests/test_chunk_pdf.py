@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from io import BytesIO
+from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -11,7 +12,7 @@ from pypdf import PdfReader, PdfWriter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from scripts import chunk_pdf
+chunk_pdf = import_module("graphrag.documents")
 
 
 class AnalyzeBatchTests(unittest.TestCase):

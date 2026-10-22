@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphrag.components import ZavaDocumentParser, ZavaDocumentSplitter
 from graphrag.pipeline import ParsedDocument
+from graphrag.pipeline import Chunk
 
 
 class TestZavaDocumentParser(unittest.TestCase):
@@ -76,6 +77,8 @@ class TestZavaDocumentSplitter(unittest.TestCase):
         )
         markdown_splitter.assert_not_called()
         self.assertEqual(len(result), 1)
+        self.assertIsInstance(result[0], Chunk)
+        self.assertEqual(result[0].text, "Example PDF")
 
     def test_markdown_splitting(self):
         pdf_splitter = Mock()
@@ -99,6 +102,8 @@ class TestZavaDocumentSplitter(unittest.TestCase):
         )
         pdf_splitter.assert_not_called()
         self.assertEqual(len(result), 1)
+        self.assertIsInstance(result[0], Chunk)
+        self.assertEqual(result[0].text, "Example Markdown")
 
     def test_unsupported_document_type(self):
         splitter = ZavaDocumentSplitter(Mock(), Mock())
@@ -117,17 +122,14 @@ class TestZavaChunkEmbedder(unittest.TestCase):
 
     @patch("graphrag.components.get_chunk_embedding")
     def test_embed_chunk(self, mock_embedding):
-        chunk = {
-            "chunk_id": "test_001",
-            "text": "Example chunk",
-        }
+        chunk = Chunk(chunk_id="test_001", text="Example chunk")
         expected_embedding = [0.1, 0.2]
         mock_embedding.return_value = expected_embedding
 
         embedder = ZavaChunkEmbedder()
         result = embedder.embed_chunk(chunk)
 
-        mock_embedding.assert_called_once_with(chunk)
+        mock_embedding.assert_called_once_with(chunk.to_record())
         self.assertEqual(result, expected_embedding)
 
 
@@ -136,18 +138,16 @@ class TestNeo4jChunkLoader(unittest.TestCase):
     @patch("graphrag.components.store_chunk")
     def test_load_chunk(self, mock_store):
         session = Mock()
-        chunk = {
-            "chunk_id": "test_001",
-            "text": "Example chunk",
-        }
+        chunk = Chunk(chunk_id="test_001", text="Example chunk")
         embedding = [0.1, 0.2]
+        chunk.set_embedding(embedding)
 
         loader = Neo4jChunkLoader(session)
-        loader.load_chunk(chunk, embedding)
+        loader.load_chunk(chunk)
 
         mock_store.assert_called_once_with(
             session,
-            chunk,
+            chunk.to_record(),
             embedding,
         )
 

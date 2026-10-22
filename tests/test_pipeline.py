@@ -9,7 +9,7 @@ from graphrag.components import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from graphrag.pipeline import CompositeDocumentProcessingPipeline
+from graphrag.pipeline import Chunk, CompositeDocumentProcessingPipeline, DocumentSource
 
 
 class TestCompositeDocumentProcessingPipeline(unittest.TestCase):
@@ -35,11 +35,11 @@ class TestCompositeDocumentProcessingPipeline(unittest.TestCase):
         parsed_document = Mock()
         self.parser.parse_document.return_value = parsed_document
 
-        chunks = [
+        chunk_records = [
             {"chunk_id": "chunk_001", "text": "First chunk"},
             {"chunk_id": "chunk_002", "text": "Second chunk"},
         ]
-        self.splitter.split_document.return_value = chunks
+        self.splitter.split_document.return_value = chunk_records
 
         self.embedder.embed_chunk.side_effect = [
             [0.1, 0.2],
@@ -57,18 +57,13 @@ class TestCompositeDocumentProcessingPipeline(unittest.TestCase):
             parsed_document
         )
 
-        self.assertEqual(
-            self.embedder.embed_chunk.call_args_list,
-            [call(chunks[0]), call(chunks[1])],
-        )
-
-        self.assertEqual(
-            self.chunk_loader.load_chunk.call_args_list,
-            [
-                call(chunks[0], [0.1, 0.2]),
-                call(chunks[1], [0.3, 0.4]),
-            ],
-        )
+        embedded_chunks = [Chunk.from_mapping(record) for record in chunk_records]
+        for chunk, embedding in zip(embedded_chunks, ([0.1, 0.2], [0.3, 0.4])):
+            chunk.set_embedding(embedding)
+        self.assertEqual(self.embedder.embed_chunk.call_args_list,
+                         [call(embedded_chunks[0]), call(embedded_chunks[1])])
+        self.assertEqual(self.chunk_loader.load_chunk.call_args_list,
+                         [call(embedded_chunks[0]), call(embedded_chunks[1])])
 
     def test_pipeline_handles_empty_chunks(self):
         self.loader.load.return_value = b"Empty document"
@@ -124,6 +119,16 @@ class TestCompositeDocumentProcessingPipeline(unittest.TestCase):
 
         self.embedder.embed_chunk.assert_called_once()
         self.chunk_loader.load_chunk.assert_called_once()
+
+    def test_pipeline_accepts_in_memory_document_source(self):
+        self.parser.parse_document.return_value = Mock()
+        self.splitter.split_document.return_value = []
+        source = DocumentSource(name="inline.md", content=b"Inline document")
+
+        self.pipeline.load_document(source)
+
+        self.loader.load.assert_not_called()
+        self.parser.parse_document.assert_called_once_with(b"Inline document", "inline.md")
 
 
 if __name__ == "__main__":
