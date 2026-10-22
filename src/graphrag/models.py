@@ -17,7 +17,7 @@ def generate_embedding(text: str) -> list[float]:
     )
 
     response = client.embeddings.create(
-        model=settings.embedding_deployment,
+        model=settings.azure_openai_embedding_deployment,
         input=text,
     )
 

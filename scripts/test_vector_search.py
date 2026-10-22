@@ -9,11 +9,12 @@ def main():
     question = "What are the employee benefits?"
     question_embedding = generate_embedding(question)
 
+    neo4j_settings = settings.neo4j
     with GraphDatabase.driver(
-        settings.neo4j_uri,
-        auth=(settings.neo4j_user, settings.neo4j_password),
+        neo4j_settings.uri,
+        auth=(neo4j_settings.username, neo4j_settings.password),
     ) as driver:
-        with driver.session(database="neo4j") as session:
+        with driver.session(database=neo4j_settings.database) as session:
             result = session.run(
                 """
                 CALL db.index.vector.queryNodes(

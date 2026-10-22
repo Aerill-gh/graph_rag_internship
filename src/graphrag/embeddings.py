@@ -18,7 +18,7 @@ def get_chunk_embedding(chunk: dict) -> list[float]:
     if not text.strip():
         raise ValueError(f"Empty text: {chunk['chunk_id']}")
 
-    model = settings.embedding_deployment
+    model = settings.azure_openai_embedding_deployment
     cache_key = hashlib.sha256(
         f"{model}:{text}".encode("utf-8")
     ).hexdigest()

@@ -4,6 +4,7 @@ from functools import partial
 
 from azure.identity import DefaultAzureCredential
 
+from graphrag.config import settings
 from graphrag.components import (
     AzureBlobDocumentLoader,
     ZavaDocumentParser,
@@ -11,10 +12,10 @@ from graphrag.components import (
     ZavaChunkEmbedder,
     Neo4jChunkLoader,
 )
-from graphrag.neo4j_store import create_neo4j_driver
+from graphrag.neo4j_store import create_neo4j_driver, create_neo4j_schema
 from graphrag.pipeline import CompositeDocumentProcessingPipeline
 
-from scripts.chunk_pdf import (
+from graphrag.documents import (
     parse_pdf_document,
     create_chunks,
     create_markdown_chunks,
@@ -38,7 +39,8 @@ def main() -> None:
         with create_neo4j_driver() as driver:
             driver.verify_connectivity()
 
-            with driver.session(database="neo4j") as session:
+            with driver.session(database=settings.neo4j.database) as session:
+                create_neo4j_schema(session)
                 pipeline = CompositeDocumentProcessingPipeline(
                     document_loader=AzureBlobDocumentLoader(credential),
                     document_parser=ZavaDocumentParser(

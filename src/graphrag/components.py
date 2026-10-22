@@ -9,8 +9,10 @@ from graphrag.config import settings
 from graphrag.embeddings import get_chunk_embedding
 from graphrag.neo4j_store import store_chunk
 from graphrag.pipeline import (
+    Chunk,
     ChunkEmbedder,
     ChunkLoader,
+    DocumentSource,
     DocumentLoader,
     DocumentParser,
     DocumentSplitter,
@@ -24,11 +26,19 @@ class AzureBlobDocumentLoader(DocumentLoader):
     def __init__(self, credential: DefaultAzureCredential) -> None:
         self.credential = credential
 
-    def load(self, document_path: str) -> bytes:
+    def load(self, source: str | DocumentSource) -> bytes:
+        if isinstance(source, DocumentSource):
+            if source.content is not None:
+                return source.content
+            blob_name = source.location
+            if not isinstance(blob_name, str) or not blob_name:
+                raise ValueError("Azure Blob source requires a string location.")
+        else:
+            blob_name = source
         with BlobClient(
             account_url=settings.storage_account_url,
             container_name=settings.blob_container,
-            blob_name=document_path,
+            blob_name=blob_name,
             credential=self.credential,
         ) as blob_client:
             return blob_client.download_blob().readall()
@@ -87,30 +97,30 @@ class ZavaDocumentSplitter(DocumentSplitter):
     def split_document(
         self,
         parsed_data: ParsedDocument,
-    ) -> list[dict]:
+    ) -> list[Chunk]:
         if parsed_data.document_type == "pdf":
-            return self.pdf_splitter(
+            records = self.pdf_splitter(
                 parsed_data.pages,
                 parsed_data.figures,
                 parsed_data.source_document,
             )
-
-        if parsed_data.document_type == "markdown":
-            return self.markdown_splitter(
+        elif parsed_data.document_type == "markdown":
+            records = self.markdown_splitter(
                 parsed_data.text.encode("utf-8"),
                 parsed_data.source_document,
             )
-
-        raise ValueError(
-            f"Unsupported document type: {parsed_data.document_type}"
-        )
+        else:
+            raise ValueError(
+                f"Unsupported document type: {parsed_data.document_type}"
+            )
+        return [Chunk.from_mapping(record, parsed_data.source_document) for record in records]
 
 
 class ZavaChunkEmbedder(ChunkEmbedder):
     """Generate embeddings using the existing cached implementation."""
 
-    def embed_chunk(self, chunk: dict) -> list[float]:
-        return get_chunk_embedding(chunk)
+    def embed_chunk(self, chunk: Chunk) -> list[float]:
+        return get_chunk_embedding(chunk.to_record())
 
 
 class Neo4jChunkLoader(ChunkLoader):
@@ -121,7 +131,8 @@ class Neo4jChunkLoader(ChunkLoader):
 
     def load_chunk(
         self,
-        chunk: dict,
-        embedding: list[float],
+        chunk: Chunk,
     ) -> None:
-        store_chunk(self.session, chunk, embedding)
+        if chunk.embedding is None:
+            raise ValueError("Cannot store a chunk before its embedding is set.")
+        store_chunk(self.session, chunk.to_record(), chunk.embedding)
