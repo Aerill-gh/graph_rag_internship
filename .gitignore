@@ -1,9 +1,16 @@
 # Secrets
 .env
 
+# Local project configuration
+src/graphrag/__init__.py
+src/graphrag/config.py
+
 # Data (downloaded or generated, not versioned)
 data/raw/
 data/cache/
+data/chunks/
+# docs
+docs/
 
 # Python
 .venv/

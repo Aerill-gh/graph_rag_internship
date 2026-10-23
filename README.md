@@ -124,6 +124,137 @@ Start the chat UI:
 uv run streamlit run app.py
 ```
 
+### Local chatbot API prototype
+
+The API supports two backends selected with `CHATBOT_BACKEND` in `.env`:
+
+- `foundry` (default): uses Foundry Agent Service with the `search_documents`
+  tool. It reuses a matching agent version or creates an updated version when the
+  model, instructions, or tools change. Each request references that exact version;
+  the app does not change a shared agent endpoint's traffic routing.
+- `langchain`: runs a LangChain agent locally, calling the chat deployment through
+  the Foundry project endpoint with Azure sign-in. It does not create a hosted agent.
+
+Both require `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL_NAME` (the chat deployment
+name). `FOUNDRY_AGENT_NAME` is used only by the Foundry backend.
+
+From the repository root:
+
+```powershell
+uv sync
+az login
+# Start the MCP server in another terminal first (instructions below).
+uv run python -m Chatbot.chat_bot_main
+```
+
+Open `http://127.0.0.1:8000/docs` and try `POST /chat` with
+`{"message": "Hello"}`. The response is `{"answer": "..."}`.
+
+To run Foundry **without MCP or document search**, use:
+
+```powershell
+$env:CHATBOT_BACKEND = "foundry"
+$env:CHATBOT_USE_DOCUMENTS = "false"
+uv run python -m Chatbot.chat_bot_main
+```
+
+Alternatively set `CHATBOT_USE_DOCUMENTS=false` in `.env`. Chat-only mode registers
+no search tools, provides no document citations, and answers from the model's
+general knowledge. It still avoids inventing Zava-specific facts. Foundry settings
+and Azure sign-in are still required. Set `CHATBOT_USE_DOCUMENTS=true` to restore
+document-grounded mode (the default); this requires the MCP server.
+
+This is a single-conversation, local learning prototype, not a multi-user chat
+service. LangChain history is kept in memory and lost when the app restarts.
+In document-grounded mode, the Foundry backend requests document context from the MCP service before
+answering each message. It does not import retrieval code or access Neo4j. The LangChain
+backend is still chat-only in this entry point. `LangChainChatBot`
+accepts optional LangChain tools and a checkpointer; its caller owns and closes
+the model clients (the API does this during shutdown). Tool execution is bounded
+by a graph recursion limit. Do not enable external LangSmith tracing for project
+data.
+
+Run the offline chatbot tests with:
+
+```powershell
+uv run python -m unittest discover -s tests -p test_chat_bot.py
+uv run python -m unittest discover -s tests -p test_foundry_tools.py
+uv run python -m unittest discover -s tests -p test_mcp_server.py
+```
+
+### Local MCP document-search server
+
+The chatbot owns the REST endpoint, agent instructions, tool-call loop, MCP client,
+MCP server, answer citations, and the `graphrag.tools.search_documents` tool.
+The RAG team supplies document parsing, embedding helpers, ingestion, and graph
+storage. The MCP server delegates to the search tool.
+
+The flow is: question -> Foundry function call -> MCP document-search tool ->
+passages returned to Foundry -> answer with `[S1]` citations and a source list.
+
+Start the MCP server from the repository root in a separate PowerShell terminal:
+
+```powershell
+# The repository's src/ tree is not installed as a Python package yet.
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+uv run python -m Chatbot.mcp_server
+```
+
+The server binds to `127.0.0.1:8001` and exposes Streamable HTTP at `/mcp`.
+It is local-only and has no authentication; do not expose it to the network.
+Set these values in `.env`, then start the chatbot in another terminal:
+
+```dotenv
+CHATBOT_BACKEND=foundry
+MCP_SERVER_URL=http://127.0.0.1:8001/mcp
+MCP_SEARCH_TOOL=search_documents
+```
+
+The tool accepts `{"question": "..."}` and returns structured content:
+
+```json
+{"passages": [{
+  "chunk_id": "example-chunk",
+  "document": "example.pdf",
+  "pages": [1],
+  "text": "A source passage."
+}]}
+```
+
+The server retains the source fields and omits the retrieval similarity score.
+An empty passages list means no evidence; Markdown may have an empty page list.
+Blank questions, retrieval failures, and malformed results are MCP errors, not
+empty results. Synchronous retrieval runs in a worker thread.
+The client also accepts one text block containing a JSON array of passages.
+
+Set `CHATBOT_BACKEND=foundry`, `MCP_SERVER_URL`, `FOUNDRY_PROJECT_ENDPOINT`, and
+`FOUNDRY_MODEL_NAME` to use this path. Startup fails explicitly without the MCP URL.
+The MCP server must be running before the chatbot starts.
+
+**Retrieval prerequisites:** `graphrag.models` and `graphrag.neo4j_store`
+import `graphrag.config.settings`. This configuration module is currently
+git-ignored: obtain the team's configuration module for a fresh checkout and set
+its required variables in your local `.env`. Retrieval requires embedding
+configuration, Neo4j credentials, indexed chunks, and an online
+`chunk_embedding_index` vector index. MCP startup and tool discovery work without
+retrieval imports; a real search reports an error if its prerequisites are not
+ready. The MCP wrapper does not implement or replace them.
+
+Offline tests mock retrieval and cover tool discovery, validation, errors, source
+preservation, and a real local Streamable HTTP round trip. They make no Azure or
+Neo4j calls. For a live check once retrieval is ready, ask a question with an answer
+you can verify in a source document, then check the passage text, page, and citation.
+The running app never returns fake documents.
+
+The Foundry loop forces a search before answering and permits at most three tool
+calls per message. MCP failures and malformed responses are errors, not empty
+search results. Final answers must cite known source IDs, or explicitly decline
+for insufficient evidence. Source-ID validation does not prove each claim is
+supported: check answers against the actual passages.
+
+A failed turn starts a fresh conversation on the next request. This prototype
+does not automatically delete persisted Foundry conversations.
+
 ### `.env`
 ```env
 NEO4J_URI=bolt://localhost:7687
