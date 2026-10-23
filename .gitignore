@@ -1,6 +1,5 @@
 # Secrets
 .env
-.env.example
 
 # Local project configuration
 src/graphrag/__init__.py
