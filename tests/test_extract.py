@@ -130,6 +130,198 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(merged[0]["relationships"], merged[1]["relationships"])
         self.assertEqual(merged[2]["entities"], [{"label": "Service", "name": "Python"}])
 
+    def test_duplicate_relationships_preserve_chunk_provenance(self):
+        entities = [
+            {"label": "Role", "name": "Engineer"},
+            {"label": "Skill", "name": "Python"},
+        ]
+
+        relationship = {
+            "source_label": "Role",
+            "source_name": "Engineer",
+            "type": "REQUIRES",
+            "target_label": "Skill",
+            "target_name": "Python",
+        }
+
+        records = [
+            {
+                "chunk_id": "chunk_001",
+                "source_document": "roles.pdf",
+                "pages": [1],
+                "entities": entities,
+                "relationships": [relationship, relationship.copy()],
+            },
+            {
+                "chunk_id": "chunk_002",
+                "source_document": "roles.pdf",
+                "pages": [2],
+                "entities": entities,
+                "relationships": [relationship.copy()],
+            },
+        ]
+
+        merged = merge_duplicate_entities(records)
+
+        self.assertEqual(len(merged), 2)
+
+        self.assertEqual(merged[0]["chunk_id"], "chunk_001")
+        self.assertEqual(merged[1]["chunk_id"], "chunk_002")
+
+        self.assertEqual(merged[0]["source_document"], "roles.pdf")
+        self.assertEqual(merged[0]["pages"], [1])
+        self.assertEqual(merged[1]["pages"], [2])
+
+        self.assertEqual(len(merged[0]["relationships"]), 1)
+        self.assertEqual(len(merged[1]["relationships"]), 1)
+
+        self.assertEqual(
+            merged[0]["relationships"][0],
+            relationship,
+        )
+
+    def test_normalized_relationship_endpoints_match_entities(self):
+        records = [
+            record(
+                "chunk_001",
+                [
+                    {"label": "Role", "name": " Data Engineer "},
+                    {"label": "Skill", "name": "PYTHON"},
+                ],
+                [
+                    {
+                        "source_label": "Role",
+                        "source_name": "data  engineer",
+                        "type": "REQUIRES",
+                        "target_label": "Skill",
+                        "target_name": " python ",
+                    },
+                ],
+            ),
+        ]
+
+        merged = merge_duplicate_entities(records)
+        result = merged[0]
+
+        self.assertEqual(
+            result["relationships"][0]["source_name"],
+            "Data Engineer",
+        )
+        self.assertEqual(
+            result["relationships"][0]["target_name"],
+            "PYTHON",
+        )
+
+        self.assertEqual(
+            validate_extraction({
+                "entities": result["entities"],
+                "relationships": result["relationships"],
+            }),
+            {
+                "entities": result["entities"],
+                "relationships": result["relationships"],
+            },
+        )
+
+    def test_empty_extraction_is_valid(self):
+        extraction = {
+            "entities": [],
+            "relationships": [],
+        }
+
+        self.assertEqual(
+            validate_extraction(extraction),
+            extraction,
+        )
+
+        merged = merge_duplicate_entities([
+            record("empty_chunk", [], [])
+        ])
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["chunk_id"], "empty_chunk")
+        self.assertEqual(merged[0]["entities"], [])
+        self.assertEqual(merged[0]["relationships"], [])
+
+    def test_duplicate_entities_within_same_chunk_are_merged(self):
+        records = [
+            record(
+                "chunk_001",
+                [
+                    {"label": "Role", "name": "Data Engineer"},
+                    {"label": "Role", "name": " data  engineer "},
+                    {"label": "Skill", "name": "Python"},
+                    {"label": "Skill", "name": " python "},
+                ],
+                [
+                    {
+                        "source_label": "Role",
+                        "source_name": "Data Engineer",
+                        "type": "REQUIRES",
+                        "target_label": "Skill",
+                        "target_name": "Python",
+                    },
+                ],
+            )
+        ]
+
+        merged = merge_duplicate_entities(records)
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(
+            merged[0]["entities"],
+            [
+                {"label": "Role", "name": "Data Engineer"},
+                {"label": "Skill", "name": "Python"},
+            ],
+        )
+        self.assertEqual(len(merged[0]["relationships"]), 1)
+
+    def test_aliases_are_not_merged_without_evidence(self):
+        records = [
+            record(
+                "chunk_001",
+                [{"label": "Role", "name": "CEO"}],
+                [],
+            ),
+            record(
+                "chunk_002",
+                [{"label": "Role", "name": "Chief Executive Officer"}],
+                [],
+            ),
+        ]
+
+        merged = merge_duplicate_entities(records)
+
+        self.assertEqual(
+            merged[0]["entities"][0]["name"],
+            "CEO",
+        )
+        self.assertEqual(
+            merged[1]["entities"][0]["name"],
+            "Chief Executive Officer",
+        )
+
+    def test_reversed_relationship_is_rejected(self):
+        extraction = {
+            "entities": [
+                {"label": "Role", "name": "Engineer"},
+                {"label": "Skill", "name": "Python"},
+            ],
+            "relationships": [
+                {
+                    "source_label": "Skill",
+                    "source_name": "Python",
+                    "type": "REQUIRES",
+                    "target_label": "Role",
+                    "target_name": "Engineer",
+                }
+            ],
+        }
+
+        with self.assertRaises(ValueError):
+            validate_extraction(extraction)
+
     def test_merging_rejects_records_outside_the_schema(self):
         with self.assertRaises(ValueError):
             merge_duplicate_entities([record("bad", [{"label": "UnknownEntity", "name": "A"}], [])])
