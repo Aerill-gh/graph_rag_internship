@@ -53,6 +53,18 @@ class ExtractionTests(unittest.TestCase):
              {"source_label": "Policy", "source_name": "Remote work", "type": "APPLIES_TO", "target_label": "Role", "target_name": "Engineer"}),
             ([{"label": "Plan", "name": "Health Plus"}, {"label": "Service", "name": "Dental"}],
              {"source_label": "Plan", "source_name": "Health Plus", "type": "COVERS", "target_label": "Service", "target_name": "Dental"}),
+            ([{"label": "Company", "name": "Zava"}, {"label": "Department", "name": "Engineering"}],
+             {"source_label": "Company", "source_name": "Zava", "type": "HAS_DEPARTMENT", "target_label": "Department", "target_name": "Engineering"}),
+            ([{"label": "Company", "name": "Zava"}, {"label": "Plan", "name": "Health Plus"}],
+             {"source_label": "Company", "source_name": "Zava", "type": "OFFERS", "target_label": "Plan", "target_name": "Health Plus"}),
+            ([{"label": "Policy", "name": "Remote work"}, {"label": "ApplicabilityGroup", "name": "Managers"}],
+             {"source_label": "Policy", "source_name": "Remote work", "type": "APPLIES_TO", "target_label": "ApplicabilityGroup", "target_name": "Managers"}),
+            ([{"label": "Employee", "name": "Alex"}, {"label": "ApplicabilityGroup", "name": "Managers"}],
+             {"source_label": "Employee", "source_name": "Alex", "type": "APPLIES_ON", "target_label": "ApplicabilityGroup", "target_name": "Managers"}),
+            ([{"label": "Employee", "name": "Alex"}, {"label": "Role", "name": "Engineer"}],
+             {"source_label": "Employee", "source_name": "Alex", "type": "HAS_ROLE", "target_label": "Role", "target_name": "Engineer"}),
+            ([{"label": "Plan", "name": "Health Plus"}, {"label": "Service", "name": "Dental"}],
+             {"source_label": "Plan", "source_name": "Health Plus", "type": "EXCLUDES", "target_label": "Service", "target_name": "Dental"}),
         ]
         for entities, relationship in fixtures:
             with self.subTest(relationship=relationship["type"]):
@@ -61,7 +73,7 @@ class ExtractionTests(unittest.TestCase):
 
     def test_rejects_unapproved_labels_relationships_and_missing_endpoints(self):
         for extraction in (
-            {"entities": [{"label": "Employee", "name": "A"}], "relationships": []},
+            {"entities": [{"label": "UnknownEntity", "name": "A"}], "relationships": []},
             {"entities": [{"label": "Role", "name": "Engineer"}], "relationships": [{
                 "source_label": "Role", "source_name": "Engineer", "type": "DELETE",
                 "target_label": "Skill", "target_name": "Python",
@@ -94,7 +106,7 @@ class ExtractionTests(unittest.TestCase):
     def test_invalid_response_is_not_cached(self):
         with TemporaryDirectory() as directory:
             models = Mock()
-            models.chat.return_value = '{"entities":[{"label":"Employee","name":"Alex"}],"relationships":[]}'
+            models.chat.return_value = '{"entities":[{"label":"UnknownEntity","name":"Alex"}],"relationships":[]}'
             chunk = {"chunk_id": "chunk-1", "source_document": "roles.pdf", "text": "Source.", "pages": []}
             with self.assertRaises(ValueError):
                 extract_chunk(chunk, models, Path(directory), CONFIGURATION)
@@ -120,16 +132,16 @@ class ExtractionTests(unittest.TestCase):
 
     def test_merging_rejects_records_outside_the_schema(self):
         with self.assertRaises(ValueError):
-            merge_duplicate_entities([record("bad", [{"label": "Employee", "name": "A"}], [])])
+            merge_duplicate_entities([record("bad", [{"label": "UnknownEntity", "name": "A"}], [])])
 
-    def test_additional_candidate_ontology_relations_are_not_enabled_silently(self):
+    def test_unknown_relationships_remain_rejected(self):
         with self.assertRaises(ValueError):
             validate_extraction({
                 "entities": [{"label": "Plan", "name": "Health Plus"},
                              {"label": "Service", "name": "Dental"}],
                 "relationships": [{
                     "source_label": "Plan", "source_name": "Health Plus",
-                    "type": "EXCLUDES", "target_label": "Service", "target_name": "Dental",
+                    "type": "GRANTS", "target_label": "Service", "target_name": "Dental",
                 }],
             })
 
