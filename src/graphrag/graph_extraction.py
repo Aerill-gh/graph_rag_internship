@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -18,6 +19,10 @@ DOMAIN_RELATIONSHIPS = frozenset(
 )
 EXTRACTION_CACHE_DIR = PROJECT_ROOT / "data/cache/graph_extraction"
 EXTRACTION_REQUEST_PREFIX = "Return a JSON object with entities and relationships extracted from this source data:"
+REVIEWED_DENTAL_CONFLICT_CHUNK = "Benefit_Options_002"
+REVIEWED_DENTAL_EXCLUSIONS = frozenset({
+    "dental", "dental services", "dental exams", "cleanings", "fillings",
+})
 _RELATIONSHIP_RULES = "\n".join(
     f"- {source} -[{relation}]-> {target}"
     for source, relation, target in sorted(DOMAIN_RELATIONSHIPS)
@@ -33,6 +38,14 @@ Do not infer a department from a job title, a skill from duties, or coverage,
 applicability, employment, or company relationships from co-occurrence. Include
 only entities explicitly identified in this chunk. Include a relationship only
 when this chunk directly supports it, and ensure both endpoints are in entities.
+Do not infer an EXCLUDES relationship merely because a service is absent from a
+plan's list of covered services. Create EXCLUDES only when the source explicitly
+says the service is excluded or not covered, or clearly states an exhaustive
+list whose scope includes that service. If the source says both plans cover a
+category, do not infer that one plan excludes specific services in that category
+from a list that only names the other plan's examples. For example, when a chunk
+says both plans cover dental services, do not mark dental, dental exams,
+cleanings, or fillings as excluded unless it explicitly says so.
 Do not emit Document, Chunk, HAS_CHUNK, or MENTIONS; ingestion creates those
 source links. Preserve entity names as written. Return empty lists when unsupported.
 Return JSON only, without Markdown fences, in exactly this format:
@@ -76,6 +89,30 @@ def validate_extraction(result: dict) -> dict:
         if target not in entity_keys:
             raise ValueError(f"Relationship target is missing from entities: {target!r}")
     return result
+
+
+def _apply_reviewed_source_corrections(extraction: dict, chunk: dict) -> dict:
+    text = " ".join(chunk["text"].casefold().split())
+    shared_dental_coverage = "both plans offer coverage for vision and dental services" in text
+    if chunk["chunk_id"] != REVIEWED_DENTAL_CONFLICT_CHUNK or not shared_dental_coverage:
+        return extraction
+
+    relationships = [
+        relationship for relationship in extraction["relationships"]
+        if not (
+            relationship["type"] == "EXCLUDES"
+            and relationship["target_label"] == "Service"
+            and " ".join(relationship["target_name"].casefold().split()) in REVIEWED_DENTAL_EXCLUSIONS
+            and not re.search(
+                rf"(?:does not|doesn't|do not)\s+(?:offer coverage for|cover)\s+"
+                rf"{re.escape(relationship['target_name'].casefold())}\b",
+                text,
+            )
+        )
+    ]
+    if len(relationships) == len(extraction["relationships"]):
+        return extraction
+    return {**extraction, "relationships": relationships}
 
 
 class FoundryExtractionModel:
@@ -157,6 +194,7 @@ def extract_chunk(
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(extraction, indent=2, ensure_ascii=False), encoding="utf-8")
     validate_extraction(extraction)
+    extraction = _apply_reviewed_source_corrections(extraction, chunk)
     return {"chunk_id": chunk["chunk_id"], **extraction}
 
 
