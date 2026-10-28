@@ -1,7 +1,9 @@
 import json
 import re
+from collections.abc import Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+from typing import Literal, TypedDict
 from uuid import uuid4
 
 from azure.ai.projects import AIProjectClient
@@ -44,6 +46,33 @@ conditions and distinguish COVERS from EXCLUDES. Never claim an exhaustive list
 or count from truncated results or an incompletely extracted graph. Report
 document disagreements rather than choosing an unsupported winner.
 """.rstrip()
+
+
+# Only the most recent messages are replayed, so long chats do not grow token costs forever.
+MAX_HISTORY_MESSAGES = 20
+
+
+class HistoryMessage(TypedDict):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+def history_input(question: str, history: Sequence[HistoryMessage]) -> list[dict]:
+    """Turn earlier chat turns plus the new question into Responses API input items."""
+    if isinstance(history, (str, bytes)) or not isinstance(history, Sequence):
+        raise ValueError("History must be a list of messages.")
+    items = []
+    for message in history[-MAX_HISTORY_MESSAGES:]:
+        if (
+            not isinstance(message, dict)
+            or message.get("role") not in ("user", "assistant")
+            or not isinstance(message.get("content"), str)
+            or not message["content"].strip()
+        ):
+            raise ValueError("Each history message needs a user/assistant role and nonempty content.")
+        items.append({"type": "message", "role": message["role"], "content": message["content"]})
+    items.append({"type": "message", "role": "user", "content": question})
+    return items
 
 
 @dataclass
@@ -103,9 +132,15 @@ class BaselineAgent:
             raise ValueError("Invalid search_documents arguments.")
         return {"passages": search_documents(arguments["question"])}
 
-    def ask(self, question: str) -> AgentAnswer:
+    def ask(
+        self, question: str, history: Sequence[HistoryMessage] | None = None,
+    ) -> AgentAnswer:
+        """Answer one question. Optional history gives follow-up questions their context;
+        evidence still comes only from tool calls made during this turn."""
         if not isinstance(question, str) or not question.strip():
             raise ValueError("Question must be a nonempty string.")
+        # Validate before creating any Foundry resources, so bad input costs nothing.
+        first_input = question if not history else history_input(question, history)
 
         with (
             DefaultAzureCredential() as credential,
@@ -140,7 +175,7 @@ class BaselineAgent:
                 "type": "agent_reference",
             }}
             response = client.responses.create(
-                input=question,
+                input=first_input,
                 conversation=conversation.id,
                 extra_body=agent_reference,
                 tool_choice=(

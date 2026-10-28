@@ -1,23 +1,20 @@
 import os
 import unittest
-from unittest.mock import ANY, AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphRecursionError
-from starlette.requests import Request
 
-from Chatbot import chat_bot_main
 from Chatbot.chat_bot import (
     FoundryChatBot, LangChainChatBot, RAG_SYSTEM_PROMPT, SEARCH_DOCUMENTS_TOOL,
 )
 from azure.ai.projects.models import PromptAgentDefinition
 from openai.types.responses import ResponseFunctionToolCall
-from Chatbot.config import ChatSettings, load_chat_settings
+from Chatbot.config import load_chat_settings
 from Chatbot.document_tools import DocumentPassage
 
 
@@ -230,124 +227,6 @@ class TestChatSettings(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "FOUNDRY_PROJECT_ENDPOINT"):
                 load_chat_settings()
-
-
-class TestChatHttpEndpoint(unittest.TestCase):
-    def test_chat_only_does_not_open_mcp_connection(self):
-        with (
-            patch.object(chat_bot_main, "load_chat_settings", return_value=ChatSettings(
-                "foundry", "https://example.invalid", "test", "zava",
-                use_documents=False,
-            )),
-            patch.object(chat_bot_main, "FoundryChatBot") as factory,
-            patch.object(chat_bot_main, "streamable_http_client") as transport,
-        ):
-            factory.return_value.chat.return_value = "Hello"
-            with TestClient(chat_bot_main.app) as client:
-                self.assertEqual(
-                    client.post("/chat", json={"message": "Hi"}).json(),
-                    {"answer": "Hello"},
-                )
-                self.assertIsNone(factory.call_args.kwargs["document_search"])
-                transport.assert_not_called()
-            factory.return_value.close.assert_called_once()
-
-    def test_json_contract_for_both_backends(self):
-        for backend in ("foundry", "langchain"):
-            with (
-                self.subTest(backend=backend),
-                patch.object(
-                    chat_bot_main,
-                    "load_chat_settings",
-                    return_value=ChatSettings(
-                        backend, "https://example.invalid/api/projects/test", "test", "zava",
-                        mcp_server_url="https://example.invalid/mcp",
-                    ),
-                ),
-                patch.object(chat_bot_main, "FoundryChatBot") as foundry,
-                patch.object(chat_bot_main, "DefaultAzureCredential"),
-                patch.object(chat_bot_main, "get_bearer_token_provider"),
-                patch.object(chat_bot_main, "ChatOpenAI") as model,
-                patch.object(chat_bot_main, "LangChainChatBot") as langchain,
-                patch.object(chat_bot_main, "streamable_http_client") as transport,
-                patch.object(chat_bot_main, "ClientSession") as sessions,
-            ):
-                transport.return_value = AsyncMock()
-                transport.return_value.__aenter__.return_value = (Mock(), Mock(), Mock())
-                sessions.return_value = AsyncMock()
-                model.return_value.root_async_client = AsyncMock()
-                factory = foundry if backend == "foundry" else langchain
-                factory.return_value.chat.return_value = "Hello"
-                with TestClient(chat_bot_main.app) as client:
-                    response = client.post("/chat", json={"message": "Hi"})
-                    self.assertEqual(response.status_code, 200)
-                    self.assertEqual(response.json(), {"answer": "Hello"})
-                    for body in ({"message": ""}, {"message": "   "}, {}):
-                        self.assertEqual(client.post("/chat", json=body).status_code, 422)
-                    factory.return_value.chat.assert_called_once_with("Hi")
-
-
-class TestApiBackendSelection(unittest.IsolatedAsyncioTestCase):
-    async def test_foundry_remains_default_and_closes(self):
-        settings = ChatSettings(
-            "foundry", "https://example.invalid", "test", "zava",
-            mcp_server_url="https://example.invalid/mcp",
-        )
-        with (
-            patch.object(chat_bot_main, "load_chat_settings", return_value=settings),
-            patch.object(chat_bot_main, "FoundryChatBot") as factory,
-            patch.object(chat_bot_main, "LangChainChatBot") as langchain_factory,
-            patch.object(chat_bot_main, "streamable_http_client") as transport,
-            patch.object(chat_bot_main, "ClientSession") as sessions,
-        ):
-            transport.return_value = AsyncMock()
-            transport.return_value.__aenter__.return_value = (Mock(), Mock(), Mock())
-            sessions.return_value = AsyncMock()
-            factory.return_value.chat.return_value = "Hello"
-            async with chat_bot_main.lifespan(chat_bot_main.app):
-                request = Request({"type": "http", "app": chat_bot_main.app})
-                response = chat_bot_main.chat(
-                    chat_bot_main.ChatRequest(message="Hi"), request
-                )
-                self.assertEqual(response.model_dump(), {"answer": "Hello"})
-                factory.assert_called_once_with(
-                    endpoint=settings.endpoint, model_name="test", agent_name="zava",
-                    document_search=ANY,
-                )
-                langchain_factory.assert_not_called()
-            factory.return_value.close.assert_called_once()
-            sessions.return_value.__aenter__.return_value.initialize.assert_awaited_once()
-            sessions.return_value.__aexit__.assert_awaited_once()
-            transport.return_value.__aexit__.assert_awaited_once()
-
-    async def test_langchain_uses_project_endpoint_and_closes_clients(self):
-        settings = ChatSettings(
-            "langchain", "https://example.invalid/api/projects/test/", "test", "zava"
-        )
-        with (
-            patch.object(chat_bot_main, "load_chat_settings", return_value=settings),
-            patch.object(chat_bot_main, "DefaultAzureCredential") as credential,
-            patch.object(chat_bot_main, "get_bearer_token_provider") as provider,
-            patch.object(chat_bot_main, "ChatOpenAI") as model,
-            patch.object(chat_bot_main, "LangChainChatBot") as factory,
-            patch.object(chat_bot_main, "FoundryChatBot") as foundry_factory,
-        ):
-            async_client = AsyncMock()
-            model.return_value.root_async_client = async_client
-            async with chat_bot_main.lifespan(chat_bot_main.app):
-                self.assertIs(chat_bot_main.app.state.chat_bot, factory.return_value)
-                self.assertEqual(
-                    model.call_args.kwargs["base_url"],
-                    "https://example.invalid/api/projects/test/openai/v1",
-                )
-                provider.assert_called_once_with(
-                    credential.return_value.__enter__.return_value,
-                    "https://ai.azure.com/.default",
-                )
-                foundry_factory.assert_not_called()
-            model.return_value.root_client.close.assert_called_once()
-            async_client.__aexit__.assert_awaited_once()
-            credential.return_value.__exit__.assert_called_once()
 
 
 if __name__ == "__main__":

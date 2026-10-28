@@ -1,8 +1,8 @@
 import json
 import logging
 import os
-import re
 import sqlite3
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -19,11 +19,36 @@ else:
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CHAT_API_URL = "http://127.0.0.1:8000/chat"
 REQUEST_TIMEOUT_SECONDS = 120
+SOURCES_SEPARATOR = "\n\nSources:\n"
+# Labels shown in the sidebar switch and on each answer.
+AGENT_MODES = {"baseline": "Baseline", "graphrag": "GraphRAG"}
 logger = logging.getLogger(__name__)
 
 
 class ChatServiceError(RuntimeError):
     """A safe, user-displayable error from the chatbot API."""
+
+
+@dataclass(frozen=True)
+class ChatAnswer:
+    answer: str
+    mode: str
+    sources: list[dict] = field(default_factory=list)
+    tools_used: list[str] = field(default_factory=list)
+
+    def to_saved_text(self) -> str:
+        """Answer text plus a Sources block, in the format _render_answer displays."""
+        lines = []
+        for source in self.sources:
+            pages = ", ".join(str(page) for page in source.get("pages") or []) or "unknown"
+            lines.append(
+                f"- [{source.get('citation_id', '?')}] {source.get('source_document', '?')}, "
+                f"pages {pages}, chunk {source.get('chunk_id', '?')}"
+            )
+        if self.tools_used:
+            # The tool list shows whether GraphRAG really used the graph for this answer.
+            lines.append(f"\nTools used: {' → '.join(self.tools_used)}")
+        return self.answer + (SOURCES_SEPARATOR + "\n".join(lines) if lines else "")
 
 
 def get_chat_api_url() -> str:
@@ -32,17 +57,28 @@ def get_chat_api_url() -> str:
     return os.getenv("CHATBOT_API_URL", DEFAULT_CHAT_API_URL).strip() or DEFAULT_CHAT_API_URL
 
 
+def history_for_api(messages: list[ChatMessage]) -> list[dict[str, str]]:
+    """Send only role and answer text: the old Sources blocks are display-only."""
+    return [
+        {"role": message["role"], "content": message["content"].split(SOURCES_SEPARATOR, 1)[0]}
+        for message in messages
+    ]
+
+
 def chat_with_bot(
     question: str,
     endpoint: str | None = None,
     *,
-    history: list[ChatMessage] | None = None,
-) -> str:
+    history: list[dict[str, str]] | None = None,
+    mode: str = "baseline",
+) -> ChatAnswer:
     """Send one question to the chatbot API and return its answer."""
     if not question.strip():
         raise ValueError("Question cannot be blank.")
+    if mode not in AGENT_MODES:
+        raise ValueError(f"Unknown agent mode: {mode}")
 
-    body: dict[str, object] = {"message": question}
+    body: dict[str, object] = {"message": question, "mode": mode}
     if history is not None:
         body["history"] = history
     try:
@@ -62,10 +98,11 @@ def chat_with_bot(
         with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
+        detail = _error_detail(exc)
         exc.close()
         logger.error("Chat API returned HTTP %s.", exc.code)
         raise ChatServiceError(
-            f"The chatbot service returned HTTP {exc.code}. Check that it is running."
+            detail or f"The chatbot service returned HTTP {exc.code}. Check that it is running."
         ) from None
     except (TimeoutError, URLError, OSError) as exc:
         logger.error("Chat API request failed (%s).", type(exc).__name__)
@@ -85,12 +122,32 @@ def chat_with_bot(
         raise ChatServiceError(
             "The chatbot service returned an empty or invalid answer. Please try again."
         )
-    return answer
+    sources = payload.get("sources")
+    tools_used = payload.get("tools_used")
+    return ChatAnswer(
+        answer=answer,
+        mode=payload.get("mode") if payload.get("mode") in AGENT_MODES else mode,
+        sources=[s for s in sources if isinstance(s, dict)] if isinstance(sources, list) else [],
+        tools_used=[t for t in tools_used if isinstance(t, str)]
+        if isinstance(tools_used, list) else [],
+    )
 
 
-def _render_answer(answer: str) -> None:
-    """Show the answer and place its source list in a compact expandable section."""
-    parts = re.split(r"\n\nSources:\n", answer, maxsplit=1)
+def _error_detail(exc: HTTPError) -> str | None:
+    """Return the API's own readable error text (FastAPI's "detail"), if there is one."""
+    try:
+        detail = json.loads(exc.read().decode("utf-8")).get("detail")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+        return None
+    # Validation errors (422) have a list here; only plain sentences are shown to users.
+    return detail if isinstance(detail, str) and detail.strip() else None
+
+
+def _render_answer(answer: str, mode: str | None = None) -> None:
+    """Show which agent answered, the answer, and its sources in an expandable section."""
+    if mode in AGENT_MODES:
+        st.caption(f":material/smart_toy: {AGENT_MODES[mode]}")
+    parts = answer.split(SOURCES_SEPARATOR, 1)
     st.markdown(parts[0])
     if len(parts) == 2:
         with st.expander("Sources"):
@@ -322,6 +379,15 @@ def _main() -> None:
     with st.sidebar:
         st.markdown("## Zava Assistant")
         st.caption("Ask questions about company roles, policies, and benefits.")
+        # Same agent and instructions in both modes; GraphRAG only adds graph tools.
+        mode = st.radio(
+            "Agent",
+            options=list(AGENT_MODES),
+            format_func=AGENT_MODES.get,
+            horizontal=True,
+            key="agent_mode",
+            captions=["Document search only", "Documents + knowledge graph"],
+        )
         action = _render_chat_list(store, chats, active_id)
         st.divider()
         st.caption("Answers may be incomplete. Check the cited source passages.")
@@ -351,7 +417,7 @@ def _main() -> None:
     for message in messages:
         with st.chat_message(message["role"]):
             if message["role"] == "assistant":
-                _render_answer(message["content"])
+                _render_answer(message["content"], message.get("mode"))
             else:
                 st.markdown(message["content"])
 
@@ -377,13 +443,19 @@ def _main() -> None:
         with st.chat_message("user"):
             st.markdown(prompt)
         with st.chat_message("assistant"):
-            with st.spinner("Searching Zava information and preparing an answer..."):
+            spinner = (
+                "Searching documents and the knowledge graph..." if mode == "graphrag"
+                else "Searching Zava documents and preparing an answer..."
+            )
+            with st.spinner(spinner):
                 try:
-                    answer = chat_with_bot(prompt, history=messages)
+                    result = chat_with_bot(prompt, history=history_for_api(messages), mode=mode)
                 except ChatServiceError as exc:
                     st.session_state.chat_error = str(exc)
                 else:
-                    store.add_message(active_id, "assistant", answer)
+                    store.add_message(
+                        active_id, "assistant", result.to_saved_text(), mode=result.mode,
+                    )
         st.rerun()
 
 

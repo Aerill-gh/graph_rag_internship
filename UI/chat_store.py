@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from time import time_ns
-from typing import Iterator, Literal, TypedDict
+from typing import Iterator, Literal, NotRequired, TypedDict
 from uuid import uuid4
 
 
@@ -15,6 +15,9 @@ MAX_TITLE_LENGTH = 60
 class ChatMessage(TypedDict):
     role: Literal["user", "assistant"]
     content: str
+    # Which agent wrote an assistant answer ("baseline" or "graphrag"). Missing for
+    # user messages and for answers saved before the mode switch existed.
+    mode: NotRequired[str]
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,10 @@ class ChatStore:
                     content TEXT NOT NULL
                 );
             """)
+            # Migration: databases created before the Baseline/GraphRAG switch lack this column.
+            columns = {row[1] for row in db.execute("PRAGMA table_info(messages)")}
+            if "mode" not in columns:
+                db.execute("ALTER TABLE messages ADD COLUMN mode TEXT")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -111,11 +118,24 @@ class ChatStore:
     def messages(self, chat_id: str) -> list[ChatMessage]:
         with self._connect() as db:
             rows = db.execute(
-                "SELECT role, content FROM messages WHERE chat_id = ? ORDER BY id", (chat_id,)
+                "SELECT role, content, mode FROM messages WHERE chat_id = ? ORDER BY id",
+                (chat_id,),
             ).fetchall()
-        return [ChatMessage(role=role, content=content) for role, content in rows]
+        messages = []
+        for role, content, mode in rows:
+            message = ChatMessage(role=role, content=content)
+            if mode:
+                message["mode"] = mode
+            messages.append(message)
+        return messages
 
-    def add_message(self, chat_id: str, role: Literal["user", "assistant"], content: str) -> None:
+    def add_message(
+        self,
+        chat_id: str,
+        role: Literal["user", "assistant"],
+        content: str,
+        mode: str | None = None,
+    ) -> None:
         if role not in ("user", "assistant") or not content.strip():
             raise ValueError("A message needs a user/assistant role and nonblank content.")
         with self._connect() as db:
@@ -124,8 +144,8 @@ class ChatStore:
             if row is None:
                 raise ValueError("This chat no longer exists.")
             db.execute(
-                "INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)",
-                (chat_id, role, content),
+                "INSERT INTO messages (chat_id, role, content, mode) VALUES (?, ?, ?, ?)",
+                (chat_id, role, content, mode),
             )
             if role == "user" and row[0]:
                 db.execute(

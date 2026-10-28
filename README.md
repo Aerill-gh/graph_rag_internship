@@ -124,36 +124,58 @@ Start the chat UI:
 uv run streamlit run app.py
 ```
 
-### Local chatbot API prototype
+### Local chatbot API
 
-The API supports two backends selected with `CHATBOT_BACKEND` in `.env`:
+`Chatbot/chat_bot_main.py` is a small FastAPI app with one endpoint, `POST /chat`.
+It does not contain agent logic itself: it passes each question to the team's
+agents in `src/graphrag/chatbot/agent.py`.
 
-- `foundry` (default): uses Foundry Agent Service with the `search_documents`
-  tool. It reuses a matching agent version or creates an updated version when the
-  model, instructions, or tools change. Each request references that exact version;
-  the app does not change a shared agent endpoint's traffic routing.
-- `langchain`: runs a LangChain agent locally, calling the chat deployment through
-  the Foundry project endpoint with Azure sign-in. It does not create a hosted agent.
+- `"mode": "baseline"` (default) uses `BaselineAgent`: plain RAG with only the
+  `search_documents` tool.
+- `"mode": "graphrag"` uses `GraphRAGAgent`: the same instructions and loop plus the
+  graph tools `explore_entity` and `query_graph`.
 
-Both require `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL_NAME` (the chat deployment
-name). `FOUNDRY_AGENT_NAME` is used only by the Foundry backend.
+Because GraphRAG only adds tools to the baseline agent, the two modes stay a fair
+comparison. Both need `FOUNDRY_PROJECT_ENDPOINT`, `FOUNDRY_CHAT_DEPLOYMENT`, Azure
+sign-in, and Neo4j with indexed chunks. GraphRAG also needs the extracted graph;
+until it exists, graph tools return nothing and the agent falls back to document search.
 
-From the repository root:
+From the repository root (Neo4j must be running):
 
 ```powershell
 uv sync
 az login
-# Start the MCP server in another terminal first (instructions below).
+# The repository's src/ tree is not installed as a Python package yet.
+$env:PYTHONPATH = (Resolve-Path .\src).Path
 uv run python -m Chatbot.chat_bot_main
 ```
 
-Open `http://127.0.0.1:8000/docs` and try `POST /chat` with
-`{"message": "Hello"}`. The response is `{"answer": "..."}`.
+Open `http://127.0.0.1:8000/docs` and try `POST /chat` with:
+
+```json
+{"message": "What does PerksPlus cover?", "mode": "graphrag", "history": []}
+```
+
+The response contains the answer with `[S1]` citations, the mode, the cited
+sources, and the tools the agent used:
+
+```json
+{"answer": "... [S1]", "mode": "graphrag",
+ "sources": [{"citation_id": "S1", "source_document": "PerksPlus.pdf",
+              "chunk_id": "PerksPlus_001", "pages": [1]}],
+ "tools_used": ["explore_entity", "search_documents"]}
+```
+
+`history` (optional) holds earlier `user`/`assistant` messages of the same chat, so
+follow-up questions work. Only the last 20 messages are sent to the model. History
+is context only: every turn still searches, and citations must come from that turn.
+Invalid answers return HTTP 502, and unavailable Azure/Neo4j returns HTTP 503 with a
+readable `detail` message. Every question creates and deletes a temporary Foundry
+agent and conversation, as in `scripts/ask.py`.
 
 ### Streamlit chatbot UI
 
-Run the FastAPI chatbot first using the instructions above. For RAG mode, keep
-Neo4j and the MCP server running as well. From the repository root, start the UI:
+Start the chatbot API first (see above), then from the repository root:
 
 ```powershell
 uv sync
@@ -163,10 +185,16 @@ uv run streamlit run UI\streamlit_chat.py --server.address 127.0.0.1
 Open the local URL printed by Streamlit (usually `http://localhost:8501`).
 Use the top-right menu to select **Light**, **Dark**, or **System**. The chat
 background, text, borders, and accents follow the selected theme.
-The UI sends `{"message": "...", "history": [...]}` to `CHATBOT_API_URL`, defaulting to
-`http://127.0.0.1:8000/chat`. Set `CHATBOT_API_URL` in `.env` only if the API
-uses a different address. Restart both the API and UI after updating to this version.
+The UI sends `{"message": "...", "mode": "...", "history": [...]}` to
+`CHATBOT_API_URL`, defaulting to `http://127.0.0.1:8000/chat`. Set
+`CHATBOT_API_URL` in `.env` only if the API uses a different address. Restart both
+the API and UI after updating to this version.
 
+- The **Agent** switch in the sidebar selects **Baseline** (document search only)
+  or **GraphRAG** (documents + knowledge graph). Each answer shows which agent wrote
+  it, so you can ask the same question in both modes and compare.
+- The **Sources** section under an answer lists the cited documents, pages, and
+  chunks, and the tools the agent used.
 - **New chat** creates a separate conversation. Select a chat in the sidebar to switch.
 - Titles start as **New chat** and automatically use the first question (up to 60
   characters), without an extra AI call.
@@ -176,55 +204,30 @@ uses a different address. Restart both the API and UI after updating to this ver
 - At most **three** chats can be pinned. Pinned chats appear first; within each
   group, recently active chats appear first.
 
-Chats, names, pins, and messages are saved in `data/chats/history.sqlite3`, which
-is git-ignored. They survive browser refreshes and app restarts. This is a local,
+Chats, names, pins, messages, and the agent mode of each answer are saved in
+`data/chats/history.sqlite3`, which is git-ignored. They survive browser refreshes
+and app restarts. Older databases are upgraded automatically. This is a local,
 single-user library: all browsers connecting to this app share it. There are no
 accounts or per-user access controls. Messages are stored as plain text on this
 computer, so do not use it for sensitive employee information.
 
-Each UI request includes only the selected chat's saved user/assistant messages.
-The API uses an isolated context for that request, rather than its default
-conversation, so chats do not share AI memory and follow-ups still work after an
-API restart. Foundry creates a fresh hosted conversation for each such request;
-deleting a local chat does not delete hosted Foundry conversations. Long chats
-send more context and consume more tokens. Tool results are still retrieved anew
-for every RAG turn. Requests without `history` retain the original default API
-conversation behavior; use `"history": []` to explicitly start independently.
+Each UI request includes only the selected chat's saved messages (without their
+Sources blocks), so chats do not share AI memory. Long chats send more context and
+consume more tokens.
 
-To run Foundry **without MCP or document search**, use:
+Run the offline API, UI, and agent tests (no Azure or Neo4j calls) with:
 
 ```powershell
-$env:CHATBOT_BACKEND = "foundry"
-$env:CHATBOT_USE_DOCUMENTS = "false"
-uv run python -m Chatbot.chat_bot_main
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+uv run python -m unittest tests.test_chat_api tests.test_streamlit_chat tests.test_saved_chats tests.chatbot.test_agent
 ```
 
-Alternatively set `CHATBOT_USE_DOCUMENTS=false` in `.env`. Chat-only mode registers
-no search tools, provides no document citations, and answers from the model's
-general knowledge. It still avoids inventing Zava-specific facts. Foundry settings
-and Azure sign-in are still required. Set `CHATBOT_USE_DOCUMENTS=true` to restore
-document-grounded mode (the default); this requires the MCP server.
+### Earlier prototype: `Chatbot/chat_bot.py` and MCP
 
-This is a local learning prototype, not a multi-user chat service. The default
-API conversation (requests without `history`) is shared; its LangChain history
-is kept in memory and lost when the app restarts.
-In document-grounded mode, the Foundry backend requests document context from the MCP service before
-answering each message. It does not import retrieval code or access Neo4j. The LangChain
-backend is still chat-only in this entry point. `LangChainChatBot`
-accepts optional LangChain tools and a checkpointer; its caller owns and closes
-the model clients (the API does this during shutdown). Tool execution is bounded
-by a graph recursion limit. Do not enable external LangSmith tracing for project
-data.
-
-Run the offline chatbot tests with:
-
-```powershell
-uv run python -m unittest discover -s tests -p test_chat_bot.py
-uv run python -m unittest discover -s tests -p test_foundry_tools.py
-uv run python -m unittest discover -s tests -p test_mcp_server.py
-uv run python -m unittest discover -s tests -p test_streamlit_chat.py
-uv run python -m unittest discover -s tests -p test_saved_chats.py
-```
+`Chatbot/chat_bot.py` (`FoundryChatBot`, `LangChainChatBot`) and the MCP server
+below are the first chatbot prototype. The API above no longer uses them; they are
+kept for reference until the team decides to remove them. Their tests are
+`tests/test_chat_bot.py`, `tests/test_foundry_tools.py`, and `tests/test_mcp_server.py`.
 
 ### Local MCP document-search server
 

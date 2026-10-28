@@ -5,17 +5,14 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from azure.ai.projects.models import PromptAgentDefinition
 from azure.core.exceptions import ResourceNotFoundError
-from fastapi.testclient import TestClient
 from mcp.types import CallToolResult, TextContent
 from openai.types.responses import ResponseFunctionToolCall
 from pydantic import ValidationError
 
-from Chatbot import chat_bot_main
 from Chatbot.chat_bot import (
     FoundryChatBot, INSUFFICIENT_EVIDENCE_ANSWER, MAX_SEARCH_CALLS,
     NO_EVIDENCE_ANSWER, RAG_SYSTEM_PROMPT, SEARCH_DOCUMENTS_TOOL,
 )
-from Chatbot.config import ChatSettings
 from Chatbot.document_tools import DocumentPassage, McpDocumentSearch
 
 
@@ -214,34 +211,6 @@ class TestFoundryTools(unittest.TestCase):
             self.bot()
         self.projects.return_value.__exit__.assert_called_once()
         self.credentials.return_value.__exit__.assert_called_once()
-
-    def test_http_to_foundry_to_fake_mcp(self):
-        self.client.responses.create.side_effect = [tool_response(), answer_response()]
-        session = AsyncMock()
-        session.call_tool.return_value = CallToolResult(
-            content=[TextContent(type="text", text=json.dumps([PASSAGE.model_dump()]))],
-        )
-        with (
-            patch.object(chat_bot_main, "load_chat_settings", return_value=ChatSettings(
-                "foundry", "https://example.invalid/project", "test", "zava",
-                mcp_server_url="https://example.invalid/mcp",
-            )),
-            patch.object(chat_bot_main, "streamable_http_client") as transport,
-            patch.object(chat_bot_main, "ClientSession") as session_factory,
-        ):
-            transport.return_value = AsyncMock()
-            transport.return_value.__aenter__.return_value = (Mock(), Mock(), Mock())
-            session_factory.return_value = AsyncMock()
-            session_factory.return_value.__aenter__.return_value = session
-            with TestClient(chat_bot_main.app) as client:
-                response = client.post("/chat", json={"message": "Question"})
-                self.assertEqual(response.status_code, 200, response.text)
-                self.assertIn("example.pdf", response.json()["answer"])
-            session.call_tool.assert_awaited_once_with(
-                "search_documents", arguments={"question": "Example question"},
-            )
-            session.initialize.assert_awaited_once()
-
 
 class TestMcpContract(unittest.IsolatedAsyncioTestCase):
     async def test_json_and_structured_passages(self):

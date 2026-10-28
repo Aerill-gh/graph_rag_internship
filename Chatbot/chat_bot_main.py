@@ -1,19 +1,18 @@
-from contextlib import AsyncExitStack, asynccontextmanager
-from functools import partial
+import logging
+from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Literal
 
 import uvicorn
-from anyio import from_thread
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-from fastapi import FastAPI, Request
-from langchain_openai import ChatOpenAI
-from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
-from Chatbot.chat_bot import FoundryChatBot, HistoryMessage, LangChainChatBot
-from Chatbot.config import load_chat_settings
-from Chatbot.document_tools import McpDocumentSearch
+from graphrag.chatbot.agent import BaselineAgent, GraphRAGAgent, HistoryMessage
+
+
+logger = logging.getLogger(__name__)
+
+# "baseline" = plain RAG (only search_documents); "graphrag" = the same agent plus graph tools.
+AgentMode = Literal["baseline", "graphrag"]
 
 
 class ChatHistoryMessage(BaseModel):
@@ -31,6 +30,7 @@ class ChatHistoryMessage(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
     history: list[ChatHistoryMessage] | None = None
+    mode: AgentMode = "baseline"
 
     @field_validator("message")
     @classmethod
@@ -40,49 +40,26 @@ class ChatRequest(BaseModel):
         return message
 
 
+class Source(BaseModel):
+    citation_id: str
+    source_document: str
+    chunk_id: str
+    pages: list[int | str] = []
+
+
 class ChatResponse(BaseModel):
     answer: str
+    mode: AgentMode
+    sources: list[Source]
+    tools_used: list[str]
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    settings = load_chat_settings()
-    async with AsyncExitStack() as stack:
-        if settings.backend == "foundry":
-            document_search = None
-            if settings.use_documents:
-                if not settings.mcp_server_url:
-                    raise RuntimeError("MCP_SERVER_URL is required for document-grounded chat.")
-                read_stream, write_stream, _ = await stack.enter_async_context(
-                    streamable_http_client(settings.mcp_server_url)
-                )
-                session = await stack.enter_async_context(
-                    ClientSession(read_stream, write_stream)
-                )
-                await session.initialize()
-                document_tools = McpDocumentSearch(session, settings.mcp_search_tool)
-                document_search = partial(from_thread.run, document_tools.search_documents)
-            chat_bot = FoundryChatBot(
-                endpoint=settings.endpoint,
-                model_name=settings.model_name,
-                agent_name=settings.agent_name,
-                document_search=document_search,
-            )
-            stack.callback(chat_bot.close)
-            app.state.chat_bot = chat_bot
-        else:
-            credential = stack.enter_context(DefaultAzureCredential())
-            model = ChatOpenAI(
-                model=settings.model_name,
-                base_url=f"{settings.endpoint.rstrip('/')}/openai/v1",
-                api_key=get_bearer_token_provider(
-                    credential, "https://ai.azure.com/.default"
-                ),
-            )
-            stack.callback(model.root_client.close)
-            await stack.enter_async_context(model.root_async_client)
-            app.state.chat_bot = LangChainChatBot(model=model)
-        yield
+    # Both agents read the same Foundry settings, so a missing .env value stops startup
+    # with a clear message instead of failing on the first question.
+    app.state.agents = {"baseline": BaselineAgent(), "graphrag": GraphRAGAgent()}
+    yield
 
 
 app = FastAPI(lifespan=lifespan)
@@ -90,14 +67,44 @@ app = FastAPI(lifespan=lifespan)
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(body: ChatRequest, request: Request) -> ChatResponse:
-    if body.history is None:
-        answer = request.app.state.chat_bot.chat(body.message)
-    else:
-        history = [
-            HistoryMessage(role=item.role, content=item.content) for item in body.history
-        ]
-        answer = request.app.state.chat_bot.chat_with_history(body.message, history)
-    return ChatResponse(answer=answer)
+    agent = request.app.state.agents[body.mode]
+    history: list[HistoryMessage] = [
+        HistoryMessage(role=item.role, content=item.content) for item in body.history or []
+    ]
+    try:
+        result = agent.ask(body.message, history=history)
+    except (ValueError, RuntimeError) as exc:
+        # The agent ran but its answer failed a check (missing citations, tool budget, ...).
+        logger.error("%s agent returned an invalid answer (%s).", body.mode, type(exc).__name__)
+        raise HTTPException(
+            status_code=502,
+            detail=f"The {body.mode} agent could not produce a valid cited answer. Please try again.",
+        ) from None
+    except Exception as exc:
+        # Azure sign-in, Foundry, or Neo4j problems. Only the error type is logged, never details.
+        logger.error("%s agent is unavailable (%s).", body.mode, type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"The {body.mode} agent is unavailable. Check Azure sign-in (az login), "
+                "Foundry settings, and that Neo4j is running."
+            ),
+        ) from None
+
+    return ChatResponse(
+        answer=result.answer,
+        mode=body.mode,
+        sources=[
+            Source(
+                citation_id=source["citation_id"],
+                source_document=source["source_document"],
+                chunk_id=source["chunk_id"],
+                pages=source.get("pages") or [],
+            )
+            for source in result.sources
+        ],
+        tools_used=result.tools_used,
+    )
 
 
 if __name__ == "__main__":
