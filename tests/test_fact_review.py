@@ -33,7 +33,7 @@ class FactReviewTests(unittest.TestCase):
     def test_missing_chunk_and_unapproved_fact_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "Missing source chunk"):
             build_review_rows(self.extractions, {})
-        invalid = [{"chunk_id": "chunk-1", "entities": [{"label": "Employee", "name": "A"}],
+        invalid = [{"chunk_id": "chunk-1", "entities": [{"label": "UnknownEntity", "name": "A"}],
                     "relationships": []}]
         with self.assertRaises(ValueError):
             build_review_rows(invalid, {"chunk-1": self.chunk})
