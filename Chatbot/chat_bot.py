@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from contextlib import ExitStack
 from threading import Lock
+from typing import Literal, TypedDict
 from uuid import uuid4
 
 from azure.ai.projects import AIProjectClient
@@ -15,7 +16,7 @@ from azure.core.exceptions import ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
 from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
@@ -76,9 +77,18 @@ NO_EVIDENCE_ANSWER = (
 )
 
 
+class HistoryMessage(TypedDict):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ChatBot(ABC):
     @abstractmethod
     def chat(self, message: str) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
+    def chat_with_history(self, message: str, history: Sequence[HistoryMessage]) -> str:
         raise NotImplementedError
 
 
@@ -123,13 +133,26 @@ class FoundryChatBot(ChatBot):
                     # Do not reuse a turn with unanswered tool calls after a failure.
                     self._conversation_id = None
 
-    def _chat(self, message: str) -> str:
+    def chat_with_history(self, message: str, history: Sequence[HistoryMessage]) -> str:
+        """Use only the supplied saved chat, never the default API conversation."""
+        if not message.strip():
+            raise ValueError("Message cannot be empty.")
+        with self._lock:
+            default_conversation = self._conversation_id
+            self._conversation_id = None
+            try:
+                return self._chat(message, history)
+            finally:
+                self._conversation_id = default_conversation
+
+    def _chat(self, message: str, history: Sequence[HistoryMessage] = ()) -> str:
         if self._conversation_id is None:
             self._conversation_id = self._openai_client.conversations.create().id
 
-        inputs: ResponseInputParam = [
-            {"type": "message", "role": "user", "content": message}
-        ]
+        inputs: ResponseInputParam = []
+        for item in history:
+            inputs.append({"type": "message", "role": item["role"], "content": item["content"]})
+        inputs.append({"type": "message", "role": "user", "content": message})
         sources: dict[str, DocumentPassage] = {}
         search_count = 0
         for _ in range(MAX_SEARCH_CALLS + 1):
@@ -264,6 +287,12 @@ class LangChainChatBot(ChatBot):
             checkpointer=checkpointer if checkpointer is not None else InMemorySaver(),
             name="langchain_chat_bot",
         )
+        self._history_agent = create_agent(
+            model=model,
+            tools=tools,
+            system_prompt=SYSTEM_PROMPT,
+            name="langchain_saved_chat",
+        )
         self._thread_id = str(uuid4())
         self._lock = Lock()
 
@@ -279,7 +308,20 @@ class LangChainChatBot(ChatBot):
                     "recursion_limit": 10,
                 },
             )
-        messages = result["messages"]
+        return self._answer(result["messages"])
+
+    def chat_with_history(self, message: str, history: Sequence[HistoryMessage]) -> str:
+        if not message.strip():
+            raise ValueError("Message cannot be empty.")
+        messages = [*history, HistoryMessage(role="user", content=message)]
+        with self._lock:
+            result = self._history_agent.invoke(
+                {"messages": messages}, config={"recursion_limit": 10},
+            )
+        return self._answer(result["messages"])
+
+    @staticmethod
+    def _answer(messages: Sequence[BaseMessage]) -> str:
         if not messages or not isinstance(messages[-1], AIMessage):
             raise RuntimeError("LangChain agent did not return an assistant message.")
         answer = messages[-1].text

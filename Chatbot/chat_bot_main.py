@@ -1,6 +1,6 @@
 from contextlib import AsyncExitStack, asynccontextmanager
 from functools import partial
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Literal
 
 import uvicorn
 from anyio import from_thread
@@ -11,13 +11,26 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, Field, field_validator
 
-from Chatbot.chat_bot import FoundryChatBot, LangChainChatBot
+from Chatbot.chat_bot import FoundryChatBot, HistoryMessage, LangChainChatBot
 from Chatbot.config import load_chat_settings
 from Chatbot.document_tools import McpDocumentSearch
 
 
+class ChatHistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1)
+
+    @field_validator("content")
+    @classmethod
+    def content_must_not_be_blank(cls, content: str) -> str:
+        if not content.strip():
+            raise ValueError("History content cannot be blank.")
+        return content
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
+    history: list[ChatHistoryMessage] | None = None
 
     @field_validator("message")
     @classmethod
@@ -77,7 +90,13 @@ app = FastAPI(lifespan=lifespan)
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(body: ChatRequest, request: Request) -> ChatResponse:
-    answer = request.app.state.chat_bot.chat(body.message)
+    if body.history is None:
+        answer = request.app.state.chat_bot.chat(body.message)
+    else:
+        history = [
+            HistoryMessage(role=item.role, content=item.content) for item in body.history
+        ]
+        answer = request.app.state.chat_bot.chat_with_history(body.message, history)
     return ChatResponse(answer=answer)
 
 

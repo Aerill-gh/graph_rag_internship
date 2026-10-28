@@ -75,6 +75,27 @@ class TestFoundryTools(unittest.TestCase):
         ])
         self.assertIn("example.pdf; pages: 4; chunk: test-1", answer)
 
+    def test_saved_history_still_forces_fresh_document_search(self):
+        self.client.responses.create.side_effect = [tool_response(), answer_response()]
+        bot = self.bot()
+        history = [
+            {"role": "user", "content": "Tell me about benefits"},
+            {"role": "assistant", "content": "An earlier answer [S9]"},
+        ]
+        answer = bot.chat_with_history("What about eligibility?", history)
+        first = self.client.responses.create.call_args_list[0]
+        self.assertEqual(
+            [item["content"] for item in first.kwargs["input"]],
+            ["Tell me about benefits", "An earlier answer [S9]", "What about eligibility?"],
+        )
+        self.assertEqual(first.kwargs["tool_choice"], {
+            "type": "function", "name": "search_documents",
+        })
+        self.search.assert_called_once()
+        self.assertIn("example.pdf", answer)
+        self.assertNotIn("[S9]", answer)
+        self.assertIsNone(bot._conversation_id)
+
     def test_missing_or_stale_agent_gets_updated_version(self):
         for missing in (True, False):
             with self.subTest(missing=missing):

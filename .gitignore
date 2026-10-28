@@ -9,6 +9,7 @@ src/graphrag/config.py
 data/raw/
 data/cache/
 data/chunks/
+data/chats/
 # docs
 docs/
 

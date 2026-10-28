@@ -150,6 +150,47 @@ uv run python -m Chatbot.chat_bot_main
 Open `http://127.0.0.1:8000/docs` and try `POST /chat` with
 `{"message": "Hello"}`. The response is `{"answer": "..."}`.
 
+### Streamlit chatbot UI
+
+Run the FastAPI chatbot first using the instructions above. For RAG mode, keep
+Neo4j and the MCP server running as well. From the repository root, start the UI:
+
+```powershell
+uv sync
+uv run streamlit run UI\streamlit_chat.py --server.address 127.0.0.1
+```
+
+Open the local URL printed by Streamlit (usually `http://localhost:8501`).
+Use the top-right menu to select **Light**, **Dark**, or **System**. The chat
+background, text, borders, and accents follow the selected theme.
+The UI sends `{"message": "...", "history": [...]}` to `CHATBOT_API_URL`, defaulting to
+`http://127.0.0.1:8000/chat`. Set `CHATBOT_API_URL` in `.env` only if the API
+uses a different address. Restart both the API and UI after updating to this version.
+
+- **New chat** creates a separate conversation. Select a chat in the sidebar to switch.
+- Titles start as **New chat** and automatically use the first question (up to 60
+  characters), without an extra AI call.
+- Open the **three-dot menu** next to a chat for **Pin/Unpin**, **Rename**, or
+  **Delete**. Rename opens a separate name dialog; Delete opens a confirmation
+  dialog and removes that chat's locally saved messages only after confirmation.
+- At most **three** chats can be pinned. Pinned chats appear first; within each
+  group, recently active chats appear first.
+
+Chats, names, pins, and messages are saved in `data/chats/history.sqlite3`, which
+is git-ignored. They survive browser refreshes and app restarts. This is a local,
+single-user library: all browsers connecting to this app share it. There are no
+accounts or per-user access controls. Messages are stored as plain text on this
+computer, so do not use it for sensitive employee information.
+
+Each UI request includes only the selected chat's saved user/assistant messages.
+The API uses an isolated context for that request, rather than its default
+conversation, so chats do not share AI memory and follow-ups still work after an
+API restart. Foundry creates a fresh hosted conversation for each such request;
+deleting a local chat does not delete hosted Foundry conversations. Long chats
+send more context and consume more tokens. Tool results are still retrieved anew
+for every RAG turn. Requests without `history` retain the original default API
+conversation behavior; use `"history": []` to explicitly start independently.
+
 To run Foundry **without MCP or document search**, use:
 
 ```powershell
@@ -164,8 +205,9 @@ general knowledge. It still avoids inventing Zava-specific facts. Foundry settin
 and Azure sign-in are still required. Set `CHATBOT_USE_DOCUMENTS=true` to restore
 document-grounded mode (the default); this requires the MCP server.
 
-This is a single-conversation, local learning prototype, not a multi-user chat
-service. LangChain history is kept in memory and lost when the app restarts.
+This is a local learning prototype, not a multi-user chat service. The default
+API conversation (requests without `history`) is shared; its LangChain history
+is kept in memory and lost when the app restarts.
 In document-grounded mode, the Foundry backend requests document context from the MCP service before
 answering each message. It does not import retrieval code or access Neo4j. The LangChain
 backend is still chat-only in this entry point. `LangChainChatBot`
@@ -180,6 +222,8 @@ Run the offline chatbot tests with:
 uv run python -m unittest discover -s tests -p test_chat_bot.py
 uv run python -m unittest discover -s tests -p test_foundry_tools.py
 uv run python -m unittest discover -s tests -p test_mcp_server.py
+uv run python -m unittest discover -s tests -p test_streamlit_chat.py
+uv run python -m unittest discover -s tests -p test_saved_chats.py
 ```
 
 ### Local MCP document-search server
