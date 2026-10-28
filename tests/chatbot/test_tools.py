@@ -1,10 +1,32 @@
 import unittest
 from unittest.mock import patch
 
-from graphrag.chatbot.tools import search_documents
+from graphrag.chatbot.tools import search_documents, run_graph_tool
 
 
 class SearchDocumentsTests(unittest.TestCase):
+    def test_graph_query_maps_fact_sources_to_agent_passages(self):
+        fact = {"chunk_id": "one", "document": "PerksPlus.pdf", "pages": [3],
+                "text": "Gym memberships are covered.", "source": "PerksPlus",
+                "relationship": "COVERS", "target": "Gym memberships"}
+        with patch("graphrag.chatbot.tools.query_graph", return_value={"facts": [fact], "cypher": "MATCH ...", "truncated": False}):
+            result = run_graph_tool("query_graph", {
+                "pattern": "Plan|COVERS|Service", "source_names": ["PerksPlus"],
+                "target_name": "", "match_mode": "any", "limit": 20,
+            })
+        self.assertEqual(result["passages"][0]["source_document"], "PerksPlus.pdf")
+        self.assertEqual(result["passages"][0]["graph_fact"]["relationship"], "COVERS")
+
+    def test_ambiguous_entity_lookup_returns_candidates_not_guessed_facts(self):
+        with patch("graphrag.chatbot.tools.find_entities", return_value=[
+            {"name": "Northwind Standard", "labels": ["Plan"]},
+            {"name": "Northwind Health Plus", "labels": ["Plan"]},
+        ]), patch("graphrag.chatbot.tools.explore_entity") as explore:
+            result = run_graph_tool("explore_entity", {"name": "Northwind", "label": "Plan", "limit": 20})
+        self.assertTrue(result["ambiguous"])
+        self.assertEqual(result["passages"], [])
+        explore.assert_not_called()
+
     def setUp(self):
         embedding_patch = patch("graphrag.chatbot.tools.generate_embedding")
         driver_patch = patch("graphrag.chatbot.tools.create_neo4j_driver")

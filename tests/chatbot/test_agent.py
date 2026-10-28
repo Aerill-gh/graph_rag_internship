@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from graphrag.chatbot.agent import AgentAnswer, BaselineAgent, NOT_FOUND
+from graphrag.chatbot.agent import AgentAnswer, BaselineAgent, GraphRAGAgent, NOT_FOUND
 from graphrag.config import FoundrySettings
 
 
@@ -21,6 +21,38 @@ def make_search_call(question="Python", call_id="call-1"):
 
 
 class BaselineAgentTests(unittest.TestCase):
+    def test_graph_agent_registers_three_tools_and_cites_graph_passages(self):
+        graph_call = make_search_call()
+        graph_call.name = "explore_entity"
+        graph_call.arguments = json.dumps({"name": "PerksPlus", "label": "Plan", "limit": 20})
+        self.client.responses.create.side_effect = [
+            make_response(calls=[graph_call]), make_response("The plan covers fitness [S1]."),
+        ]
+        with patch("graphrag.chatbot.agent.run_graph_tool", return_value={"passages": self.search.return_value}):
+            result = GraphRAGAgent(self.configuration).ask("What does PerksPlus cover?")
+        self.assertEqual(result.tools_used, ["explore_entity"])
+        definition = self.project.agents.create_version.call_args.kwargs["definition"]
+        self.assertEqual({tool.name for tool in definition.tools}, {"search_documents", "explore_entity", "query_graph"})
+        self.assertEqual(self.client.responses.create.call_args_list[0].kwargs["tool_choice"], "required")
+        self.search.assert_not_called()
+
+    def test_empty_graph_lookup_can_fall_back_to_vector_search(self):
+        graph_call = make_search_call()
+        graph_call.name = "explore_entity"
+        graph_call.arguments = json.dumps({"name": "Missing", "label": "Plan", "limit": 20})
+        self.client.responses.create.side_effect = [
+            make_response(calls=[graph_call]), make_response(calls=[make_search_call()]),
+            make_response("An answer [S1]."),
+        ]
+        with patch("graphrag.chatbot.agent.run_graph_tool", return_value={"passages": []}):
+            result = GraphRAGAgent(self.configuration).ask("Question")
+        self.assertEqual(result.tools_used, ["explore_entity", "search_documents"])
+
+    def test_baseline_does_not_register_graph_tools(self):
+        self.assertEqual([tool.name for tool in self.agent.tool_definitions()], ["search_documents"])
+        with self.assertRaises(ValueError):
+            self.agent.run_tool("query_graph", {})
+
     def setUp(self):
         project_patch = patch("graphrag.chatbot.agent.AIProjectClient")
         credential_patch = patch("graphrag.chatbot.agent.DefaultAzureCredential")
@@ -58,6 +90,8 @@ class BaselineAgentTests(unittest.TestCase):
         self.assertEqual(result.sources[0]["citation_id"], "S1")
         self.assertEqual(result.sources[0]["pages"], [2])
         self.assertEqual(result.tool_calls, 1)
+        self.assertEqual(result.tools_used, ["search_documents"])
+        self.assertEqual(result.tool_trace[0]["passages"], 1)
         first = self.client.responses.create.call_args_list[0].kwargs
         self.assertEqual(first["tool_choice"]["name"], "search_documents")
         self.project.agents.delete_version.assert_called_once_with(

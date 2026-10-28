@@ -3,7 +3,7 @@ import json
 import sys
 from dataclasses import asdict
 
-from graphrag.chatbot.agent import BaselineAgent
+from graphrag.chatbot.agent import BaselineAgent, GraphRAGAgent
 
 
 def main(argv=None) -> int:
@@ -11,6 +11,7 @@ def main(argv=None) -> int:
         description="Ask the Zava Foundry baseline agent a question."
     )
     parser.add_argument("question", help="Question in quotes.")
+    parser.add_argument("--mode", choices=("baseline", "graphrag"), default="baseline")
     parser.add_argument(
         "--json", action="store_true", dest="as_json",
         help="Output the answer, sources, and tool-call count as JSON.",
@@ -20,7 +21,8 @@ def main(argv=None) -> int:
         parser.error("question must not be empty")
 
     try:
-        result = BaselineAgent().ask(args.question)
+        agent_class = BaselineAgent if args.mode == "baseline" else GraphRAGAgent
+        result = agent_class().ask(args.question)
     except (RuntimeError, ValueError) as error:
         print(f"Cannot answer: {error}", file=sys.stderr)
         return 1
@@ -45,6 +47,8 @@ def main(argv=None) -> int:
                     f"pages {pages}; chunk {source['chunk_id']}"
                 )
         print(f"\nSearch tool calls: {result.tool_calls}")
+        if result.tools_used:
+            print(f"Tools used: {', '.join(result.tools_used)}")
     return 0
 
 
