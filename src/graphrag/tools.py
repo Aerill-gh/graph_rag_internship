@@ -2,6 +2,7 @@ from typing import TypedDict
 
 from neo4j import ManagedTransaction
 
+from graphrag.config import settings
 from graphrag.models import generate_embedding
 from graphrag.neo4j_store import create_neo4j_driver
 
@@ -63,5 +64,5 @@ def search_documents(question: str) -> list[SearchResult]:
     embedding = generate_embedding(question)
 
     with create_neo4j_driver() as driver:
-        with driver.session(database="neo4j") as session:
+        with driver.session(database=settings.neo4j.database) as session:
             return session.execute_read(_search_chunks, embedding)
