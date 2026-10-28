@@ -2,6 +2,7 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from graphrag.config import FoundrySettings
 from graphrag.graph_extraction import extract_chunk
@@ -18,6 +19,25 @@ class MockModel:
 
 
 class GraphExtractionTests(unittest.TestCase):
+    def test_cache_only_miss_never_constructs_model(self):
+        with TemporaryDirectory() as directory, patch(
+            "graphrag.graph_extraction.FoundryExtractionModel"
+        ) as model:
+            with self.assertRaises(FileNotFoundError):
+                extract_chunk(self.chunk, cache_dir=Path(directory),
+                              configuration=self.configuration, cache_only=True)
+            model.assert_not_called()
+
+    def test_cache_only_hit_never_constructs_model(self):
+        with TemporaryDirectory() as directory:
+            extract_chunk(self.chunk, MockModel([json.dumps(self.valid)]),
+                          Path(directory), self.configuration)
+            with patch("graphrag.graph_extraction.FoundryExtractionModel") as model:
+                result = extract_chunk(self.chunk, cache_dir=Path(directory),
+                                       configuration=self.configuration, cache_only=True)
+                self.assertEqual(result["relationships"], self.valid["relationships"])
+                model.assert_not_called()
+
     def setUp(self):
         self.chunk = {
             "chunk_id": "chunk-1",

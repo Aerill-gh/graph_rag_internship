@@ -104,6 +104,8 @@ def extract_chunk(
     models=None,
     cache_dir: Path = EXTRACTION_CACHE_DIR,
     configuration: FoundrySettings | None = None,
+    *,
+    cache_only: bool = False,
 ) -> dict:
     for key in ("chunk_id", "source_document", "text"):
         if not isinstance(chunk.get(key), str) or not chunk[key].strip():
@@ -128,6 +130,8 @@ def extract_chunk(
     if cache_path.is_file():
         extraction = json.loads(cache_path.read_text(encoding="utf-8"))
     else:
+        if cache_only:
+            raise FileNotFoundError(f"No matching extraction cache for {chunk['chunk_id']}")
         model = models or FoundryExtractionModel(configuration)
         response_text = model.chat(request, EXTRACTION_INSTRUCTIONS, max_output_tokens=3000)
         for attempt in range(2):

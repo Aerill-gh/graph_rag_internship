@@ -43,9 +43,9 @@ def create_neo4j_schema(session, dimensions: int = EMBEDDING_DIMENSIONS) -> None
     ).consume()
 
 
-def store_chunk(session, chunk: dict, embedding: list[float]) -> None:
+def store_chunk(session, chunk: dict, embedding: list[float] | None = None) -> None:
     """Store a document chunk and its embedding in Neo4j."""
-    if len(embedding) != EMBEDDING_DIMENSIONS:
+    if embedding is not None and len(embedding) != EMBEDDING_DIMENSIONS:
         raise ValueError(f"Embedding must have {EMBEDDING_DIMENSIONS} dimensions.")
     for field in ("chunk_id", "source_document", "text"):
         if not isinstance(chunk.get(field), str) or not chunk[field].strip():
@@ -60,8 +60,8 @@ def store_chunk(session, chunk: dict, embedding: list[float]) -> None:
             c.pages = $pages,
             c.token_count = $token_count,
             c.figures_json = $figures_json,
-            c.embedding = $embedding,
-            c.embedding_model = $embedding_model
+            c.embedding = coalesce($embedding, c.embedding),
+            c.embedding_model = coalesce($embedding_model, c.embedding_model)
         MERGE (d)-[:HAS_CHUNK]->(c)
         """,
         chunk_id=chunk["chunk_id"],
@@ -71,7 +71,7 @@ def store_chunk(session, chunk: dict, embedding: list[float]) -> None:
         token_count=chunk["token_count"],
         figures_json=json.dumps(chunk.get("figures", []), allow_nan=False),
         embedding=embedding,
-        embedding_model=settings.azure_openai_embedding_deployment,
+        embedding_model=settings.azure_openai_embedding_deployment if embedding is not None else None,
     ).consume()
 
 

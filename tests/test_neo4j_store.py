@@ -13,6 +13,18 @@ from graphrag.neo4j_store import (
 
 
 class Neo4jStoreTests(unittest.TestCase):
+    def test_source_only_write_preserves_vectors_without_embedding_settings(self):
+        session = Mock()
+        chunk = {"chunk_id": "offline", "source_document": "source.pdf", "text": "Source text", "pages": [1], "token_count": 2}
+        with patch("graphrag.neo4j_store.settings") as configuration:
+            store_chunk(session, chunk)
+            configuration.assert_not_called()
+            self.assertNotIn("azure_openai_embedding_deployment", [item[0] for item in configuration.mock_calls])
+        query = session.run.call_args.args[0]
+        self.assertIn("coalesce($embedding, c.embedding)", query)
+        self.assertIsNone(session.run.call_args.kwargs["embedding"])
+        self.assertIsNone(session.run.call_args.kwargs["embedding_model"])
+
     def setUp(self):
         self.session = Mock()
         settings_patch = patch("graphrag.neo4j_store.settings")

@@ -4,10 +4,28 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import call, patch
 
-from scripts.build_graph import build_graph_for_chunks, load_chunks
+from scripts.build_graph import build_cached_graph, build_graph_for_chunks, load_chunks
 
 
 class BuildGraphTests(unittest.TestCase):
+    def test_offline_build_reports_missing_and_stores_available_facts(self):
+        chunks = [{"chunk_id": "one"}, {"chunk_id": "two"}]
+        record = {"chunk_id": "one", "entities": [{"label": "Role", "name": "Engineer"}], "relationships": []}
+        with TemporaryDirectory() as directory, patch(
+            "scripts.build_graph.extract_chunk", side_effect=[record, FileNotFoundError()]
+        ) as extract, patch("scripts.build_graph.store_chunk") as store, patch(
+            "scripts.build_graph.store_extraction"
+        ) as facts:
+            report_path = Path(directory) / "report.json"
+            report = build_cached_graph(MockSession(), chunks, report_path)
+            self.assertEqual(report["missing_chunk_ids"], ["two"])
+            self.assertEqual(report["extracted_chunks"], 1)
+            self.assertEqual(store.call_count, 2)
+            self.assertEqual(facts.call_count, 1)
+            self.assertTrue(all(item.kwargs == {"cache_only": True} for item in extract.call_args_list))
+            self.assertEqual(json.loads(report_path.read_text()), report)
+            self.assertEqual(json.loads(report_path.with_name("offline_extractions.json").read_text()), [record])
+
     def test_load_chunks_is_sorted_and_supports_a_pilot_limit(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
