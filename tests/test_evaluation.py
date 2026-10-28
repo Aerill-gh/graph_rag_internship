@@ -79,6 +79,15 @@ class EvaluationQuestionsTests(unittest.TestCase):
         self.assertEqual(Counter(question["type"] for question in self.questions), {
             "simple_fact": 8, "comparison": 6, "list_count": 6, "not_in_documents": 4,
         })
+        self.assertEqual(
+            {document for question in self.questions for document in question["source_document"]},
+            {
+                "Benefit_Options.pdf", "employee_handbook.pdf",
+                "Northwind_Health_Plus_Benefits_Details.pdf",
+                "Northwind_Standard_Benefits_Details.pdf", "PerksPlus.pdf",
+                "role_library.pdf", "Zava_Company_Overview.md",
+            },
+        )
         for question in self.questions:
             self.assertTrue(question["question"].strip())
             self.assertTrue(question["expected_answer"].strip())
