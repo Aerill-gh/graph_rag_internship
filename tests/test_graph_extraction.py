@@ -1,5 +1,7 @@
 import json
+import io
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -145,6 +147,100 @@ class GraphExtractionTests(unittest.TestCase):
             self.assertEqual(len(model.requests), 2)
             self.assertIn("Relationship target is missing", model.requests[1])
             self.assertEqual(len(list(Path(directory).glob("*.json"))), 1)
+
+    def test_company_exclusion_repair_is_guided_to_ontology_pattern(self):
+        invalid = {
+            "entities": [
+                {"label": "Company", "name": "Northwind Health Plus"},
+                {"label": "Service", "name": "home health care"},
+            ],
+            "relationships": [{
+                "source_label": "Company", "source_name": "Northwind Health Plus",
+                "type": "EXCLUDES", "target_label": "Service", "target_name": "home health care",
+            }],
+        }
+        corrected = {
+            "entities": [
+                {"label": "Plan", "name": "Northwind Health Plus"},
+                {"label": "Service", "name": "home health care"},
+            ],
+            "relationships": [{
+                "source_label": "Plan", "source_name": "Northwind Health Plus",
+                "type": "EXCLUDES", "target_label": "Service", "target_name": "home health care",
+            }],
+        }
+        model = MockModel([json.dumps(invalid), json.dumps(corrected)])
+        with TemporaryDirectory() as directory:
+            result = extract_chunk(
+                self.chunk, model, Path(directory), self.configuration
+            )
+
+        self.assertEqual(result["relationships"], corrected["relationships"])
+        self.assertIn("A Company cannot directly COVERS or EXCLUDES a Service", model.requests[1])
+        self.assertEqual(len(model.requests), 2)
+
+    def test_service_covers_service_repair_uses_explicit_plan(self):
+        chunk = {
+            "chunk_id": "chunk-1",
+            "source_document": "benefits.pdf",
+            "text": "The Northwind Health Plus plan covers a Chronic Condition Management Program.",
+        }
+        invalid = {
+            "entities": [
+                {"label": "Service", "name": "Disease Management"},
+                {"label": "Service", "name": "Chronic Condition Management Program"},
+            ],
+            "relationships": [{
+                "source_label": "Service", "source_name": "Disease Management",
+                "type": "COVERS", "target_label": "Service",
+                "target_name": "Chronic Condition Management Program",
+            }],
+        }
+        corrected = {
+            "entities": [
+                {"label": "Plan", "name": "Northwind Health Plus"},
+                {"label": "Service", "name": "Chronic Condition Management Program"},
+            ],
+            "relationships": [{
+                "source_label": "Plan", "source_name": "Northwind Health Plus",
+                "type": "COVERS", "target_label": "Service",
+                "target_name": "Chronic Condition Management Program",
+            }],
+        }
+        model = MockModel([json.dumps(invalid), json.dumps(corrected)])
+        with TemporaryDirectory() as directory:
+            result = extract_chunk(
+                chunk, model, Path(directory), self.configuration
+            )
+
+        self.assertEqual(result["relationships"], corrected["relationships"])
+        self.assertIn("Never create relationships from one Service to", model.requests[1])
+        self.assertEqual(len(model.requests), 2)
+
+    def test_persistent_unsupported_relationship_is_skipped_and_reported(self):
+        invalid = {
+            "entities": [
+                {"label": "Service", "name": "Disease Management"},
+                {"label": "Service", "name": "Chronic Condition Management Program"},
+            ],
+            "relationships": [{
+                "source_label": "Service", "source_name": "Disease Management",
+                "type": "COVERS", "target_label": "Service",
+                "target_name": "Chronic Condition Management Program",
+            }],
+        }
+        model = MockModel([json.dumps(invalid), json.dumps(invalid)])
+        with TemporaryDirectory() as directory:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = extract_chunk(
+                    self.chunk, model, Path(directory), self.configuration
+                )
+
+            self.assertEqual(result["relationships"], [])
+            self.assertEqual(len(list(Path(directory).glob("*.json"))), 1)
+        self.assertIn("Skipped 1 ontology-invalid relationship(s) in chunk-1", output.getvalue())
+        self.assertEqual(len(model.requests), 2)
 
     def test_still_invalid_response_is_rejected_and_not_cached(self):
         invalid = {

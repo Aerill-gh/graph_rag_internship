@@ -115,6 +115,42 @@ def _apply_reviewed_source_corrections(extraction: dict, chunk: dict) -> dict:
     return {**extraction, "relationships": relationships}
 
 
+def _remove_unsupported_relationships(extraction: dict, chunk_id: str) -> dict | None:
+    if (
+        not isinstance(extraction, dict)
+        or set(extraction) != {"entities", "relationships"}
+        or not isinstance(extraction["entities"], list)
+        or not isinstance(extraction["relationships"], list)
+    ):
+        return None
+
+    valid_relationships = []
+    rejected_patterns = []
+    for relationship in extraction["relationships"]:
+        if not isinstance(relationship, dict):
+            valid_relationships.append(relationship)
+            continue
+        source_label = relationship.get("source_label")
+        relationship_type = relationship.get("type")
+        target_label = relationship.get("target_label")
+        if all(isinstance(value, str) for value in (source_label, relationship_type, target_label)):
+            pattern = (source_label, relationship_type, target_label)
+            if pattern not in DOMAIN_RELATIONSHIPS or pattern not in ALLOWED_RELATIONSHIPS:
+                rejected_patterns.append(pattern)
+                continue
+        valid_relationships.append(relationship)
+
+    if not rejected_patterns:
+        return None
+    sanitized = {**extraction, "relationships": valid_relationships}
+    validate_extraction(sanitized)
+    print(
+        f"Skipped {len(rejected_patterns)} ontology-invalid relationship(s) "
+        f"in {chunk_id}: {rejected_patterns}"
+    )
+    return sanitized
+
+
 class FoundryExtractionModel:
     def __init__(self, configuration: FoundrySettings):
         self.configuration = configuration
@@ -178,6 +214,14 @@ def extract_chunk(
                 break
             except (json.JSONDecodeError, ValueError) as error:
                 if attempt == 1:
+                    if isinstance(error, ValueError) and str(error).startswith(
+                        "Unsupported relationship pattern:"
+                    ):
+                        extraction = _remove_unsupported_relationships(
+                            json.loads(response_text), chunk["chunk_id"]
+                        )
+                        if extraction is not None:
+                            break
                     raise ValueError(
                         f"Extraction remained invalid after one repair attempt: {error}"
                     ) from error
@@ -186,7 +230,18 @@ def extract_chunk(
                     "Return a corrected JSON object. Use only the listed ontology "
                     "labels and relationship directions; every relationship endpoint "
                     "must exactly match an entity's label and name. Return empty lists "
-                    "instead of inventing an unsupported fact."
+                    "instead of inventing an unsupported fact. Valid coverage "
+                    "patterns are (Plan)-[:COVERS]->(Service) and "
+                    "(Plan)-[:EXCLUDES]->(Service). A Company "
+                    "cannot directly COVERS or EXCLUDES a Service. If the source "
+                    "explicitly identifies the company-named entity as a benefit plan, "
+                    "use the Plan label and include that Plan entity; otherwise omit "
+                    "the unsupported relationship. Do not guess a label to satisfy "
+                    "validation. Never create relationships from one Service to "
+                    "another Service. COVERS and EXCLUDES must start from a Plan "
+                    "and point to a Service. Use a Plan source only when the source "
+                    "text explicitly identifies it as a plan; otherwise omit the "
+                    "unsupported relationship."
                 )
                 response_text = model.chat(
                     repair_request, EXTRACTION_INSTRUCTIONS, max_output_tokens=3000
