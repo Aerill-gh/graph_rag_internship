@@ -124,6 +124,184 @@ Start the chat UI:
 uv run streamlit run app.py
 ```
 
+### Local chatbot API
+
+`Chatbot/chat_bot_main.py` is a small FastAPI app with one endpoint, `POST /chat`.
+It does not contain agent logic itself: it passes each question to the team's
+agents in `src/graphrag/chatbot/agent.py`.
+
+- `"mode": "baseline"` (default) uses `BaselineAgent`: plain RAG with only the
+  `search_documents` tool.
+- `"mode": "graphrag"` uses `GraphRAGAgent`: the same instructions and loop plus the
+  graph tools `explore_entity` and `query_graph`.
+
+Because GraphRAG only adds tools to the baseline agent, the two modes stay a fair
+comparison. Both need `FOUNDRY_PROJECT_ENDPOINT`, `FOUNDRY_CHAT_DEPLOYMENT`, Azure
+sign-in, and Neo4j with indexed chunks. GraphRAG also needs the extracted graph;
+until it exists, graph tools return nothing and the agent falls back to document search.
+
+From the repository root (Neo4j must be running):
+
+```powershell
+uv sync
+az login
+# The repository's src/ tree is not installed as a Python package yet.
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+uv run python -m Chatbot.chat_bot_main
+```
+
+Open `http://127.0.0.1:8000/docs` and try `POST /chat` with:
+
+```json
+{"message": "What does PerksPlus cover?", "mode": "graphrag", "history": []}
+```
+
+The response contains the answer with `[S1]` citations, the mode, the cited
+sources, and the tools the agent used:
+
+```json
+{"answer": "... [S1]", "mode": "graphrag",
+ "sources": [{"citation_id": "S1", "source_document": "PerksPlus.pdf",
+              "chunk_id": "PerksPlus_001", "pages": [1]}],
+ "tools_used": ["explore_entity", "search_documents"]}
+```
+
+`history` (optional) holds earlier `user`/`assistant` messages of the same chat, so
+follow-up questions work. Only the last 20 messages are sent to the model. History
+is context only: every turn still searches, and citations must come from that turn.
+Invalid answers return HTTP 502, and unavailable Azure/Neo4j returns HTTP 503 with a
+readable `detail` message. Every question creates and deletes a temporary Foundry
+agent and conversation, as in `scripts/ask.py`.
+
+### Streamlit chatbot UI
+
+Start the chatbot API first (see above), then from the repository root:
+
+```powershell
+uv sync
+uv run streamlit run UI\streamlit_chat.py --server.address 127.0.0.1
+```
+
+Open the local URL printed by Streamlit (usually `http://localhost:8501`).
+Use the top-right menu to select **Light**, **Dark**, or **System**. The chat
+background, text, borders, and accents follow the selected theme.
+The UI sends `{"message": "...", "mode": "...", "history": [...]}` to
+`CHATBOT_API_URL`, defaulting to `http://127.0.0.1:8000/chat`. Set
+`CHATBOT_API_URL` in `.env` only if the API uses a different address. Restart both
+the API and UI after updating to this version.
+
+- The **Agent** switch in the sidebar selects **Baseline** (document search only)
+  or **GraphRAG** (documents + knowledge graph). Each answer shows which agent wrote
+  it, so you can ask the same question in both modes and compare.
+- The **Sources** section under an answer lists the cited documents, pages, and
+  chunks, and the tools the agent used.
+- **New chat** creates a separate conversation. Select a chat in the sidebar to switch.
+- Titles start as **New chat** and automatically use the first question (up to 60
+  characters), without an extra AI call.
+- Open the **three-dot menu** next to a chat for **Pin/Unpin**, **Rename**, or
+  **Delete**. Rename opens a separate name dialog; Delete opens a confirmation
+  dialog and removes that chat's locally saved messages only after confirmation.
+- At most **three** chats can be pinned. Pinned chats appear first; within each
+  group, recently active chats appear first.
+
+Chats, names, pins, messages, and the agent mode of each answer are saved in
+`data/chats/history.sqlite3`, which is git-ignored. They survive browser refreshes
+and app restarts. Older databases are upgraded automatically. This is a local,
+single-user library: all browsers connecting to this app share it. There are no
+accounts or per-user access controls. Messages are stored as plain text on this
+computer, so do not use it for sensitive employee information.
+
+Each UI request includes only the selected chat's saved messages (without their
+Sources blocks), so chats do not share AI memory. Long chats send more context and
+consume more tokens.
+
+Run the offline API, UI, and agent tests (no Azure or Neo4j calls) with:
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+uv run python -m unittest tests.test_chat_api tests.test_streamlit_chat tests.test_saved_chats tests.chatbot.test_agent
+```
+
+### Earlier prototype: `Chatbot/chat_bot.py` and MCP
+
+`Chatbot/chat_bot.py` (`FoundryChatBot`, `LangChainChatBot`) and the MCP server
+below are the first chatbot prototype. The API above no longer uses them; they are
+kept for reference until the team decides to remove them. Their tests are
+`tests/test_chat_bot.py`, `tests/test_foundry_tools.py`, and `tests/test_mcp_server.py`.
+
+### Local MCP document-search server
+
+The chatbot owns the REST endpoint, agent instructions, tool-call loop, MCP client,
+MCP server, answer citations, and the `graphrag.tools.search_documents` tool.
+The RAG team supplies document parsing, embedding helpers, ingestion, and graph
+storage. The MCP server delegates to the search tool.
+
+The flow is: question -> Foundry function call -> MCP document-search tool ->
+passages returned to Foundry -> answer with `[S1]` citations and a source list.
+
+Start the MCP server from the repository root in a separate PowerShell terminal:
+
+```powershell
+# The repository's src/ tree is not installed as a Python package yet.
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+uv run python -m Chatbot.mcp_server
+```
+
+The server binds to `127.0.0.1:8001` and exposes Streamable HTTP at `/mcp`.
+It is local-only and has no authentication; do not expose it to the network.
+Set these values in `.env`, then start the chatbot in another terminal:
+
+```dotenv
+CHATBOT_BACKEND=foundry
+MCP_SERVER_URL=http://127.0.0.1:8001/mcp
+MCP_SEARCH_TOOL=search_documents
+```
+
+The tool accepts `{"question": "..."}` and returns structured content:
+
+```json
+{"passages": [{
+  "chunk_id": "example-chunk",
+  "document": "example.pdf",
+  "pages": [1],
+  "text": "A source passage."
+}]}
+```
+
+The server retains the source fields and omits the retrieval similarity score.
+An empty passages list means no evidence; Markdown may have an empty page list.
+Blank questions, retrieval failures, and malformed results are MCP errors, not
+empty results. Synchronous retrieval runs in a worker thread.
+The client also accepts one text block containing a JSON array of passages.
+
+Set `CHATBOT_BACKEND=foundry`, `MCP_SERVER_URL`, `FOUNDRY_PROJECT_ENDPOINT`, and
+`FOUNDRY_MODEL_NAME` to use this path. Startup fails explicitly without the MCP URL.
+The MCP server must be running before the chatbot starts.
+
+**Retrieval prerequisites:** `graphrag.models` and `graphrag.neo4j_store`
+import `graphrag.config.settings`. This configuration module is currently
+git-ignored: obtain the team's configuration module for a fresh checkout and set
+its required variables in your local `.env`. Retrieval requires embedding
+configuration, Neo4j credentials, indexed chunks, and an online
+`chunk_embedding_index` vector index. MCP startup and tool discovery work without
+retrieval imports; a real search reports an error if its prerequisites are not
+ready. The MCP wrapper does not implement or replace them.
+
+Offline tests mock retrieval and cover tool discovery, validation, errors, source
+preservation, and a real local Streamable HTTP round trip. They make no Azure or
+Neo4j calls. For a live check once retrieval is ready, ask a question with an answer
+you can verify in a source document, then check the passage text, page, and citation.
+The running app never returns fake documents.
+
+The Foundry loop forces a search before answering and permits at most three tool
+calls per message. MCP failures and malformed responses are errors, not empty
+search results. Final answers must cite known source IDs, or explicitly decline
+for insufficient evidence. Source-ID validation does not prove each claim is
+supported: check answers against the actual passages.
+
+A failed turn starts a fresh conversation on the next request. This prototype
+does not automatically delete persisted Foundry conversations.
+
 ### `.env`
 ```env
 NEO4J_URI=bolt://localhost:7687

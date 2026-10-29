@@ -2,31 +2,23 @@ from azure.identity import AzureCliCredential
 from azure.storage.blob import BlobServiceClient
 from pathlib import Path
 
-STORAGE_ACCOUNT_NAME = "aidepartmentstorage"
-CONTAINER_NAME = "docs"
-
-# Replace with the exact blob name shown in your container
-BLOB_NAME = "role_library.pdf"
+from graphrag.config import settings
 
 def main():
-    account_url = (
-        f"https://{STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
-    )
-
     credential = AzureCliCredential()
 
     try:
         client = BlobServiceClient(
-            account_url=account_url,
+            account_url=settings.storage_account_url,
             credential=credential,
         )
 
         blob_client = client.get_blob_client(
-            container=CONTAINER_NAME,
-            blob=BLOB_NAME,
+            container=settings.blob_container,
+            blob=settings.blob_name,
         )
 
-        output_path = Path(BLOB_NAME).name
+        output_path = Path(settings.blob_name).name
 
         with open(output_path, "wb") as file:
             file.write(blob_client.download_blob().readall())
