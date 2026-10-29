@@ -256,6 +256,42 @@ class GraphExtractionTests(unittest.TestCase):
             self.assertEqual(len(model.requests), 2)
             self.assertEqual(list(Path(directory).glob("*.json")), [])
 
+    def test_company_exclusion_repair_uses_supported_plan_rule(self):
+        invalid = {
+            "entities": [
+                {"label": "Company", "name": "Health Plan"},
+                {"label": "Service", "name": "cosmetic procedures"},
+            ],
+            "relationships": [{
+                "source_label": "Company", "source_name": "Health Plan",
+                "type": "EXCLUDES", "target_label": "Service",
+                "target_name": "cosmetic procedures",
+            }],
+        }
+        corrected = {
+            "entities": [
+                {"label": "Plan", "name": "Health Plan"},
+                {"label": "Service", "name": "cosmetic procedures"},
+            ],
+            "relationships": [{
+                **invalid["relationships"][0], "source_label": "Plan",
+            }],
+        }
+        chunk = {**self.chunk, "text": "The Health Plan does not cover cosmetic procedures."}
+        model = MockModel([json.dumps(invalid), json.dumps(corrected)])
+        with TemporaryDirectory() as directory:
+            result = extract_chunk(chunk, model, Path(directory), self.configuration)
+            self.assertEqual(result["entities"], corrected["entities"])
+            self.assertEqual(result["relationships"], corrected["relationships"])
+            self.assertIn("Unsupported relationship pattern:", model.requests[1])
+            self.assertIn("COVERS and EXCLUDES must start from a Plan", model.requests[1])
+            self.assertIn("Do not guess a label to satisfy validation", model.requests[1])
+            cached = extract_chunk(
+                chunk, cache_dir=Path(directory),
+                configuration=self.configuration, cache_only=True,
+            )
+            self.assertEqual(cached, result)
+
 
 if __name__ == "__main__":
     unittest.main()

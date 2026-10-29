@@ -218,6 +218,11 @@ class TestSavedChatUI(unittest.TestCase):
     def button(self, label):
         return next(button for button in self.app.button if button.label == label)
 
+    def test_sidebar_uses_logo_instead_of_text_heading(self):
+        self.assertTrue((streamlit_chat.PROJECT_ROOT / "UI" / "assets" / "zava_logo.png").is_file())
+        self.assertEqual(len(self.app.sidebar.get("image")), 1)
+        self.assertFalse(any("Zava Assistant" in item.value for item in self.app.sidebar.markdown))
+
     def test_new_switch_rename_pin_delete_and_reload(self):
         first = self.app.session_state.active_chat_id
         self.app.chat_input[0].set_value("My first question").run()

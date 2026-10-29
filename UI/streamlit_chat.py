@@ -306,6 +306,16 @@ def _main() -> None:
                                         padding: 1rem 1.1rem; margin-bottom: .9rem; }
         [data-testid="stChatInput"] { border-radius: 16px; }
         .stButton > button { border-radius: 12px; }
+        [data-testid="stSidebarHeader"] {
+            height: 0; min-height: 0; margin-bottom: 0; overflow: visible;
+        }
+        [data-testid="stSidebarCollapseButton"] {
+            position: absolute; top: .5rem; right: .5rem; z-index: 1;
+        }
+        [data-testid="stSidebarUserContent"] { padding-top: 0; }
+        [data-testid="stSidebar"] .st-key-sidebar_logo {
+            transform: translateX(-.4rem);
+        }
         [data-testid="stSidebar"] .st-key-new_chat button {
             justify-content: flex-start; background: transparent; border: 0;
         }
@@ -377,7 +387,8 @@ def _main() -> None:
     messages = store.messages(active_id)
 
     with st.sidebar:
-        st.markdown("## Zava Assistant")
+        with st.container(key="sidebar_logo"):
+            st.image(str(PROJECT_ROOT / "UI" / "assets" / "zava_logo.png"), width="stretch")
         st.caption("Ask questions about company roles, policies, and benefits.")
         # Same agent and instructions in both modes; GraphRAG only adds graph tools.
         mode = st.radio(
