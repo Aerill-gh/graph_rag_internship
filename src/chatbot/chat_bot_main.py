@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 from chatbot.agent import BaselineAgent, GraphRAGAgent, HistoryMessage
+from chatbot.chat_store import ChatStore
 
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
     history: list[ChatHistoryMessage] | None = None
     mode: AgentMode = "baseline"
+    conversation_id: str | None = None
 
     @field_validator("message")
     @classmethod
@@ -54,11 +56,30 @@ class ChatResponse(BaseModel):
     tools_used: list[str]
 
 
+class ConversationResponse(BaseModel):
+    """Minimal conversation info sent to frontend."""
+    id: str
+    title: str
+    pinned: bool
+
+
+class ConversationUpdateRequest(BaseModel):
+    """Update request for conversation title or pinned status."""
+    title: str | None = None
+    pinned: bool | None = None
+
+
+class ConversationMessagesResponse(BaseModel):
+    """Messages for a conversation."""
+    messages: list[dict]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Both agents read the same Foundry settings, so a missing .env value stops startup
     # with a clear message instead of failing on the first question.
     app.state.agents = {"baseline": BaselineAgent(), "graphrag": GraphRAGAgent()}
+    app.state.chat_store = ChatStore()
     yield
 
 
@@ -91,7 +112,7 @@ def chat(body: ChatRequest, request: Request) -> ChatResponse:
             ),
         ) from None
 
-    return ChatResponse(
+    response = ChatResponse(
         answer=result.answer,
         mode=body.mode,
         sources=[
@@ -105,6 +126,78 @@ def chat(body: ChatRequest, request: Request) -> ChatResponse:
         ],
         tools_used=result.tools_used,
     )
+
+    # Auto-save the messages if conversation_id is provided
+    if body.conversation_id:
+        store = request.app.state.chat_store
+        # Reconstruct the answer with sources for storage
+        answer_text = result.answer
+        if result.sources:
+            source_lines = [
+                f"- [{s['citation_id']}] {s['source_document']}, pages {', '.join(str(p) for p in s.get('pages') or [])}, chunk {s['chunk_id']}"
+                for s in result.sources
+            ]
+            answer_text += "\n\nSources:\n" + "\n".join(source_lines)
+        if result.tools_used:
+            answer_text += "\n\nTools used: " + " → ".join(result.tools_used)
+        
+        store.add_message(body.conversation_id, "user", body.message)
+        store.add_message(body.conversation_id, "assistant", answer_text, mode=body.mode)
+
+    return response
+
+
+@app.get("/conversations", response_model=list[ConversationResponse])
+def list_conversations(request: Request) -> list[ConversationResponse]:
+    """Get all conversations, sorted by most recent first."""
+    store = request.app.state.chat_store
+    chats = store.list_chats()
+    return [
+        ConversationResponse(id=chat.id, title=chat.title, pinned=chat.pinned)
+        for chat in chats
+    ]
+
+
+@app.post("/conversations", response_model=ConversationResponse)
+def create_conversation(request: Request) -> ConversationResponse:
+    """Create a new empty conversation."""
+    store = request.app.state.chat_store
+    chat_id = store.create_chat()
+    chat = next(c for c in store.list_chats() if c.id == chat_id)
+    return ConversationResponse(id=chat.id, title=chat.title, pinned=chat.pinned)
+
+
+@app.get("/conversations/{conversation_id}/messages", response_model=ConversationMessagesResponse)
+def get_conversation_messages(conversation_id: str, request: Request) -> ConversationMessagesResponse:
+    """Get all messages for a conversation."""
+    store = request.app.state.chat_store
+    messages = store.messages(conversation_id)
+    return ConversationMessagesResponse(messages=messages)
+
+
+@app.patch("/conversations/{conversation_id}", response_model=ConversationResponse)
+def update_conversation(
+    conversation_id: str, body: ConversationUpdateRequest, request: Request
+) -> ConversationResponse:
+    """Update conversation title or pinned status."""
+    store = request.app.state.chat_store
+    if body.title is not None:
+        store.rename_chat(conversation_id, body.title)
+    if body.pinned is not None:
+        store.set_pinned(conversation_id, body.pinned)
+    
+    chat = next((c for c in store.list_chats() if c.id == conversation_id), None)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return ConversationResponse(id=chat.id, title=chat.title, pinned=chat.pinned)
+
+
+@app.delete("/conversations/{conversation_id}")
+def delete_conversation(conversation_id: str, request: Request) -> dict:
+    """Delete a conversation."""
+    store = request.app.state.chat_store
+    store.delete_chat(conversation_id)
+    return {"status": "deleted"}
 
 
 if __name__ == "__main__":
