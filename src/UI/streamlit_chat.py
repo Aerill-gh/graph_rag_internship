@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -10,18 +9,16 @@ from urllib.request import Request, urlopen
 import streamlit as st
 from dotenv import load_dotenv
 
-if __package__:
-    from .chat_store import ChatMessage, ChatStore, MAX_PINNED_CHATS, MAX_TITLE_LENGTH, SavedChat
-else:
-    from chat_store import ChatMessage, ChatStore, MAX_PINNED_CHATS, MAX_TITLE_LENGTH, SavedChat
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CHAT_API_URL = "http://127.0.0.1:8000/chat"
+DEFAULT_BACKEND_API_URL = "http://127.0.0.1:8000"
 REQUEST_TIMEOUT_SECONDS = 120
 SOURCES_SEPARATOR = "\n\nSources:\n"
 # Labels shown in the sidebar switch and on each answer.
 AGENT_MODES = {"baseline": "Baseline", "graphrag": "GraphRAG"}
+MAX_TITLE_LENGTH = 60
+MAX_PINNED_CHATS = 3
 logger = logging.getLogger(__name__)
 
 
@@ -51,13 +48,145 @@ class ChatAnswer:
         return self.answer + (SOURCES_SEPARATOR + "\n".join(lines) if lines else "")
 
 
+@dataclass(frozen=True)
+class Conversation:
+    """Minimal conversation info from backend."""
+    id: str
+    title: str
+    pinned: bool
+
+
 def get_chat_api_url() -> str:
     """Load the project .env and return the configured chatbot API endpoint."""
     load_dotenv(PROJECT_ROOT / ".env")
     return os.getenv("CHATBOT_API_URL", DEFAULT_CHAT_API_URL).strip() or DEFAULT_CHAT_API_URL
 
 
-def history_for_api(messages: list[ChatMessage]) -> list[dict[str, str]]:
+def get_backend_api_url() -> str:
+    """Load the project .env and return the configured backend API endpoint."""
+    load_dotenv(PROJECT_ROOT / ".env")
+    return os.getenv("BACKEND_API_URL", DEFAULT_BACKEND_API_URL).strip() or DEFAULT_BACKEND_API_URL
+
+
+def _make_backend_request(
+    method: str, endpoint: str, data: dict | None = None, params: dict | None = None
+) -> dict:
+    """Helper to make HTTP requests to backend API endpoints."""
+    url = get_backend_api_url() + endpoint
+    if params:
+        query_string = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"{url}?{query_string}"
+    
+    body = json.dumps(data).encode("utf-8") if data else None
+    request = Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method=method,
+    )
+    
+    try:
+        with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = _error_detail(exc)
+        exc.close()
+        logger.error("Backend API returned HTTP %s.", exc.code)
+        raise ChatServiceError(
+            detail or f"The chatbot service returned HTTP {exc.code}. Check that it is running."
+        ) from None
+    except (TimeoutError, URLError, OSError) as exc:
+        logger.error("Backend API request failed (%s).", type(exc).__name__)
+        raise ChatServiceError(
+            "Cannot reach the chatbot service. Make sure the chatbot API is running, "
+            "then try again."
+        ) from None
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.error("Backend API returned an invalid response (%s).", type(exc).__name__)
+        raise ChatServiceError(
+            "The chatbot service returned an invalid response. Please try again."
+        ) from None
+
+
+def list_conversations() -> list[Conversation]:
+    """Fetch all conversations from the backend."""
+    try:
+        result = _make_backend_request("GET", "/conversations")
+        return [
+            Conversation(id=item["id"], title=item["title"], pinned=item["pinned"])
+            for item in result
+        ]
+    except ChatServiceError:
+        raise
+    except Exception as exc:
+        logger.error("Failed to fetch conversations (%s).", type(exc).__name__)
+        raise ChatServiceError("Cannot load chat history. Please try again.") from None
+
+
+def create_conversation() -> Conversation:
+    """Create a new conversation on the backend."""
+    try:
+        result = _make_backend_request("POST", "/conversations")
+        return Conversation(id=result["id"], title=result["title"], pinned=result["pinned"])
+    except ChatServiceError:
+        raise
+    except Exception as exc:
+        logger.error("Failed to create conversation (%s).", type(exc).__name__)
+        raise ChatServiceError("Cannot create a new chat. Please try again.") from None
+
+
+def get_conversation_messages(conversation_id: str) -> list[dict]:
+    """Fetch all messages for a conversation from the backend."""
+    try:
+        result = _make_backend_request("GET", f"/conversations/{conversation_id}/messages")
+        return result.get("messages", [])
+    except ChatServiceError:
+        raise
+    except Exception as exc:
+        logger.error("Failed to fetch messages (%s).", type(exc).__name__)
+        raise ChatServiceError("Cannot load chat messages. Please try again.") from None
+
+
+def rename_conversation(conversation_id: str, title: str) -> Conversation:
+    """Rename a conversation on the backend."""
+    try:
+        result = _make_backend_request(
+            "PATCH", f"/conversations/{conversation_id}", data={"title": title}
+        )
+        return Conversation(id=result["id"], title=result["title"], pinned=result["pinned"])
+    except ChatServiceError:
+        raise
+    except Exception as exc:
+        logger.error("Failed to rename conversation (%s).", type(exc).__name__)
+        raise ChatServiceError("Cannot rename chat. Please try again.") from None
+
+
+def set_conversation_pinned(conversation_id: str, pinned: bool) -> Conversation:
+    """Update the pinned status of a conversation on the backend."""
+    try:
+        result = _make_backend_request(
+            "PATCH", f"/conversations/{conversation_id}", data={"pinned": pinned}
+        )
+        return Conversation(id=result["id"], title=result["title"], pinned=result["pinned"])
+    except ChatServiceError:
+        raise
+    except Exception as exc:
+        logger.error("Failed to update conversation (%s).", type(exc).__name__)
+        raise ChatServiceError("Cannot update chat. Please try again.") from None
+
+
+def delete_conversation(conversation_id: str) -> None:
+    """Delete a conversation on the backend."""
+    try:
+        _make_backend_request("DELETE", f"/conversations/{conversation_id}")
+    except ChatServiceError:
+        raise
+    except Exception as exc:
+        logger.error("Failed to delete conversation (%s).", type(exc).__name__)
+        raise ChatServiceError("Cannot delete chat. Please try again.") from None
+
+
+def history_for_api(messages: list[dict]) -> list[dict[str, str]]:
     """Send only role and answer text: the old Sources blocks are display-only."""
     return [
         {"role": message["role"], "content": message["content"].split(SOURCES_SEPARATOR, 1)[0]}
@@ -71,6 +200,7 @@ def chat_with_bot(
     *,
     history: list[dict[str, str]] | None = None,
     mode: str = "baseline",
+    conversation_id: str | None = None,
 ) -> ChatAnswer:
     """Send one question to the chatbot API and return its answer."""
     if not question.strip():
@@ -81,6 +211,8 @@ def chat_with_bot(
     body: dict[str, object] = {"message": question, "mode": mode}
     if history is not None:
         body["history"] = history
+    if conversation_id is not None:
+        body["conversation_id"] = conversation_id
     try:
         request = Request(
             endpoint or get_chat_api_url(),
@@ -159,17 +291,15 @@ def _dismiss_chat_dialog() -> None:
 
 
 @st.dialog("Rename chat", on_dismiss=_dismiss_chat_dialog)
-def _rename_chat_dialog(store: ChatStore, chat: SavedChat) -> None:
+def _rename_chat_dialog(chat: Conversation) -> None:
     with st.form(f"rename_form_{chat.id}"):
         name = st.text_input("Chat name", value=chat.title, max_chars=MAX_TITLE_LENGTH)
         save = st.form_submit_button("Save", use_container_width=True)
     if save:
         try:
-            store.rename_chat(chat.id, name)
-        except ValueError as exc:
+            rename_conversation(chat.id, name)
+        except ChatServiceError as exc:
             st.error(str(exc))
-        except (sqlite3.Error, OSError):
-            _storage_error()
         else:
             _dismiss_chat_dialog()
             st.rerun()
@@ -179,7 +309,7 @@ def _rename_chat_dialog(store: ChatStore, chat: SavedChat) -> None:
 
 
 @st.dialog("Delete chat?", on_dismiss=_dismiss_chat_dialog)
-def _delete_chat_dialog(store: ChatStore, chat: SavedChat) -> None:
+def _delete_chat_dialog(chat: Conversation) -> None:
     st.write(f'Delete "{chat.title}" and its saved messages? This cannot be undone.')
     cancel, delete = st.columns(2)
     if cancel.button("Cancel", key=f"cancel_delete_{chat.id}", use_container_width=True):
@@ -189,9 +319,9 @@ def _delete_chat_dialog(store: ChatStore, chat: SavedChat) -> None:
         "Delete", key=f"confirm_delete_{chat.id}", type="primary", use_container_width=True,
     ):
         try:
-            store.delete_chat(chat.id)
-        except (sqlite3.Error, OSError):
-            _storage_error()
+            delete_conversation(chat.id)
+        except ChatServiceError as exc:
+            st.error(str(exc))
         else:
             _dismiss_chat_dialog()
             if chat.id == st.session_state.get("active_chat_id"):
@@ -201,13 +331,17 @@ def _delete_chat_dialog(store: ChatStore, chat: SavedChat) -> None:
 
 
 def _render_chat_list(
-    store: ChatStore, chats: list[SavedChat], active_id: str,
-) -> tuple[str, SavedChat] | None:
+    chats: list[Conversation], active_id: str,
+) -> tuple[str, Conversation] | None:
     action = None
     if st.button(
         "New chat", icon=":material/edit_square:", key="new_chat", use_container_width=True,
     ):
-        st.session_state.active_chat_id = store.create_chat()
+        try:
+            new_chat = create_conversation()
+            st.session_state.active_chat_id = new_chat.id
+        except ChatServiceError as exc:
+            st.error(str(exc))
         st.session_state.pop("pending_prompt", None)
         st.rerun()
 
@@ -238,8 +372,8 @@ def _render_chat_list(
                     use_container_width=True,
                 ):
                     try:
-                        store.set_pinned(chat.id, not chat.pinned)
-                    except ValueError as exc:
+                        set_conversation_pinned(chat.id, not chat.pinned)
+                    except ChatServiceError as exc:
                         st.error(str(exc))
                     else:
                         st.rerun()
@@ -257,14 +391,14 @@ def _render_chat_list(
 
 
 def _storage_error() -> None:
-    logger.exception("Local chat storage is unavailable.")
-    st.error("Cannot read or save local chats. Check disk space and access to data/chats.")
+    logger.exception("Backend chat service is unavailable.")
+    st.error("Cannot reach the chat backend service. Ensure it's running on the configured URL.")
 
 
 def main() -> None:
     try:
         _main()
-    except (sqlite3.Error, OSError):
+    except ChatServiceError:
         _storage_error()
         st.stop()
 
@@ -375,16 +509,31 @@ def _main() -> None:
         unsafe_allow_html=True,
     )
 
-    store = ChatStore()
-    chats = store.list_chats()
+    # Load conversations from backend
+    try:
+        chats = list_conversations()
+    except ChatServiceError:
+        _storage_error()
+        st.stop()
+    
     if not chats:
-        store.create_chat()
-        chats = store.list_chats()
+        try:
+            new_chat = create_conversation()
+            chats = [new_chat]
+        except ChatServiceError:
+            _storage_error()
+            st.stop()
+    
     if st.session_state.get("active_chat_id") not in {chat.id for chat in chats}:
         st.session_state.active_chat_id = chats[0].id
     active_id = st.session_state.active_chat_id
     active = next(chat for chat in chats if chat.id == active_id)
-    messages = store.messages(active_id)
+    
+    try:
+        messages = get_conversation_messages(active_id)
+    except ChatServiceError:
+        _storage_error()
+        st.stop()
 
     with st.sidebar:
         with st.container(key="sidebar_logo"):
@@ -399,7 +548,7 @@ def _main() -> None:
             key="agent_mode",
             captions=["Document search only", "Documents + knowledge graph"],
         )
-        action = _render_chat_list(store, chats, active_id)
+        action = _render_chat_list(chats, active_id)
         st.divider()
         st.caption("Answers may be incomplete. Check the cited source passages.")
 
@@ -412,9 +561,9 @@ def _main() -> None:
         if dialog_chat is None:
             _dismiss_chat_dialog()
         elif kind == "rename":
-            _rename_chat_dialog(store, dialog_chat)
+            _rename_chat_dialog(dialog_chat)
         else:
-            _delete_chat_dialog(store, dialog_chat)
+            _delete_chat_dialog(dialog_chat)
 
     st.markdown('<div class="zava-kicker">Zava · Employee knowledge assistant</div>',
                 unsafe_allow_html=True)
@@ -450,7 +599,6 @@ def _main() -> None:
     prompt = st.chat_input("Ask a question about Zava...")
     prompt = st.session_state.pop("pending_prompt", None) or prompt
     if prompt:
-        store.add_message(active_id, "user", prompt)
         with st.chat_message("user"):
             st.markdown(prompt)
         with st.chat_message("assistant"):
@@ -460,13 +608,16 @@ def _main() -> None:
             )
             with st.spinner(spinner):
                 try:
-                    result = chat_with_bot(prompt, history=history_for_api(messages), mode=mode)
+                    result = chat_with_bot(
+                        prompt, 
+                        history=history_for_api(messages), 
+                        mode=mode,
+                        conversation_id=active_id,
+                    )
                 except ChatServiceError as exc:
                     st.session_state.chat_error = str(exc)
                 else:
-                    store.add_message(
-                        active_id, "assistant", result.to_saved_text(), mode=result.mode,
-                    )
+                    _render_answer(result.to_saved_text(), result.mode)
         st.rerun()
 
 
