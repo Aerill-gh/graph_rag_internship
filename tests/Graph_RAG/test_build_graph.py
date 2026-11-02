@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import call, patch
 
-from scripts.build_graph import build_cached_graph, build_graph_for_chunks, load_chunks
+from graphrag.build_graph import build_cached_graph, build_graph_for_chunks, load_chunks
 
 
 class BuildGraphTests(unittest.TestCase):

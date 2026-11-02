@@ -8,7 +8,7 @@ from graphrag.config import settings
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.run_pipeline import main
+from graphrag.run_pipeline import main
 
 
 class TestRunPipeline(unittest.TestCase):

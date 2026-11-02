@@ -5,7 +5,7 @@ from contextlib import redirect_stderr
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from scripts.sample_graph_facts import build_review_rows, main
+from graphrag.sample_graph_facts import build_review_rows, main
 
 
 class FactReviewTests(unittest.TestCase):

@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from scripts.extract_graph_entities import main
+from graphrag.extract_graph_entities import main
 
 
 class ExtractionRunnerTests(unittest.TestCase):
