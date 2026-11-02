@@ -3,8 +3,8 @@ from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
-from Chatbot import chat_bot_main
-from graphrag.chatbot.agent import AgentAnswer
+from chatbot import chat_bot_main
+from chatbot.agent import AgentAnswer
 
 
 SOURCE = {
@@ -72,14 +72,14 @@ class TestChatApi(unittest.TestCase):
 
     def test_invalid_answer_returns_readable_502(self):
         self.graphrag.ask.side_effect = ValueError("Answer has missing or unknown source citations.")
-        with self.assertLogs("Chatbot.chat_bot_main", level="ERROR"):
+        with self.assertLogs("chatbot.chat_bot_main", level="ERROR"):
             response = self.client.post("/chat", json={"message": "Hi", "mode": "graphrag"})
         self.assertEqual(response.status_code, 502)
         self.assertIn("graphrag agent could not produce", response.json()["detail"])
 
     def test_service_failure_returns_503_without_internal_details(self):
         self.baseline.ask.side_effect = ConnectionError("neo4j://secret-host:7687 refused")
-        with self.assertLogs("Chatbot.chat_bot_main", level="ERROR") as logs:
+        with self.assertLogs("chatbot.chat_bot_main", level="ERROR") as logs:
             response = self.client.post("/chat", json={"message": "Hi"})
         self.assertEqual(response.status_code, 503)
         self.assertIn("Neo4j is running", response.json()["detail"])

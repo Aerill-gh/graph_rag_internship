@@ -7,7 +7,7 @@ from neo4j import Session
 
 from graphrag.config import settings
 from graphrag.embeddings import get_chunk_embedding
-from graphrag.neo4j_store import store_chunk
+from Neo4j.neo4j_store import store_chunk
 from graphrag.pipeline import (
     Chunk,
     ChunkEmbedder,

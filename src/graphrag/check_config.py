@@ -1,7 +1,7 @@
 import argparse
 
 from graphrag.config import settings
-from graphrag.neo4j_store import create_neo4j_driver
+from Neo4j.neo4j_store import create_neo4j_driver
 
 
 def main(argv=None) -> int:

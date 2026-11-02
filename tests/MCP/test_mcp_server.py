@@ -8,8 +8,8 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from Chatbot.document_tools import DocumentPassage, McpDocumentSearch
-from Chatbot.mcp_server import create_mcp_server, retrieve_documents
+from chatbot.document_tools import DocumentPassage, McpDocumentSearch
+from chatbot.mcp_server import create_mcp_server, retrieve_documents
 
 
 PASSAGE = DocumentPassage(

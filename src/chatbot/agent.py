@@ -11,7 +11,7 @@ from azure.ai.projects.models import FunctionTool, PromptAgentDefinition
 from azure.identity import DefaultAzureCredential
 
 from graphrag.config import FoundrySettings, settings
-from graphrag.chatbot.tools import (
+from chatbot.tools import (
     SEARCH_DOCUMENTS_DESCRIPTION, search_documents,
     EXPLORE_ENTITY_DESCRIPTION, QUERY_GRAPH_DESCRIPTION,
     graph_tool_parameters, run_graph_tool,

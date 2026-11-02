@@ -4,7 +4,7 @@ from neo4j import ManagedTransaction
 
 from graphrag.config import settings
 from graphrag.models import generate_embedding
-from graphrag.neo4j_store import create_neo4j_driver
+from Neo4j.neo4j_store import create_neo4j_driver
 
 
 VECTOR_INDEX_NAME = "chunk_embedding_index"

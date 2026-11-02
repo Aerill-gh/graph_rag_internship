@@ -4,7 +4,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
-from graphrag.chatbot.agent import AgentAnswer
+from chatbot.agent import AgentAnswer
 from scripts.ask import main
 
 

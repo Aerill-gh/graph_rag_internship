@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import Mock
 
 from graphrag.config import PROJECT_ROOT
-from graphrag.chatbot.agent import AgentAnswer
+from chatbot.agent import AgentAnswer
 from evaluation.run_eval import run_evaluation, comparison_summary
 
 

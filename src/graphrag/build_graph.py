@@ -5,7 +5,7 @@ from typing import Callable
 
 from graphrag.config import PROJECT_ROOT, settings
 from graphrag.graph_extraction import extract_chunk, merge_duplicate_entities
-from graphrag.neo4j_store import (
+from Neo4j.neo4j_store import (
     create_neo4j_driver,
     create_neo4j_schema,
     store_chunk,

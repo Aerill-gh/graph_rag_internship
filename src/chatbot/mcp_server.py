@@ -7,7 +7,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel
 
-from Chatbot.document_tools import DocumentPassage
+from chatbot.document_tools import DocumentPassage
 
 
 class SearchResponse(BaseModel):

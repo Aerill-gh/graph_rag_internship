@@ -1,5 +1,5 @@
 from graphrag.config import settings
-from graphrag.neo4j_store import ENTITY_LABELS, create_neo4j_driver
+from Neo4j.neo4j_store import ENTITY_LABELS, create_neo4j_driver
 from graphrag.ontology import ALLOWED_RELATIONSHIPS
 from neo4j import unit_of_work
 

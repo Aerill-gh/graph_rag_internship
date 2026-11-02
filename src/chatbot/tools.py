@@ -2,9 +2,9 @@ import json
 
 from graphrag.config import settings
 from graphrag.embeddings import generate_embedding
-from graphrag.neo4j_store import VECTOR_INDEX_NAME, create_neo4j_driver
+from Neo4j.neo4j_store import VECTOR_INDEX_NAME, create_neo4j_driver
 from graphrag.graph_tools import DOMAIN_PATTERNS, explore_entity, find_entities, query_graph
-from graphrag.neo4j_store import ENTITY_LABELS
+from Neo4j.neo4j_store import ENTITY_LABELS
 
 
 SEARCH_DOCUMENTS_DESCRIPTION = (

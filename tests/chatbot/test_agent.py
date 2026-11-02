@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from graphrag.chatbot.agent import (
+from chatbot.agent import (
     MAX_HISTORY_MESSAGES, AgentAnswer, BaselineAgent, GraphRAGAgent, NOT_FOUND,
 )
 from graphrag.config import FoundrySettings
@@ -30,7 +30,7 @@ class BaselineAgentTests(unittest.TestCase):
         self.client.responses.create.side_effect = [
             make_response(calls=[graph_call]), make_response("The plan covers fitness [S1]."),
         ]
-        with patch("graphrag.chatbot.agent.run_graph_tool", return_value={"passages": self.search.return_value}):
+        with patch("chatbot.agent.run_graph_tool", return_value={"passages": self.search.return_value}):
             result = GraphRAGAgent(self.configuration).ask("What does PerksPlus cover?")
         self.assertEqual(result.tools_used, ["explore_entity"])
         definition = self.project.agents.create_version.call_args.kwargs["definition"]
@@ -46,7 +46,7 @@ class BaselineAgentTests(unittest.TestCase):
             make_response(calls=[graph_call]), make_response(calls=[make_search_call()]),
             make_response("An answer [S1]."),
         ]
-        with patch("graphrag.chatbot.agent.run_graph_tool", return_value={"passages": []}):
+        with patch("chatbot.agent.run_graph_tool", return_value={"passages": []}):
             result = GraphRAGAgent(self.configuration).ask("Question")
         self.assertEqual(result.tools_used, ["explore_entity", "search_documents"])
 
@@ -56,9 +56,9 @@ class BaselineAgentTests(unittest.TestCase):
             self.agent.run_tool("query_graph", {})
 
     def setUp(self):
-        project_patch = patch("graphrag.chatbot.agent.AIProjectClient")
-        credential_patch = patch("graphrag.chatbot.agent.DefaultAzureCredential")
-        search_patch = patch("graphrag.chatbot.agent.search_documents")
+        project_patch = patch("chatbot.agent.AIProjectClient")
+        credential_patch = patch("chatbot.agent.DefaultAzureCredential")
+        search_patch = patch("chatbot.agent.search_documents")
         self.project_class = project_patch.start()
         credential_patch.start()
         self.search = search_patch.start()

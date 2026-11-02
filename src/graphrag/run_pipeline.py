@@ -12,7 +12,7 @@ from graphrag.components import (
     ZavaChunkEmbedder,
     Neo4jChunkLoader,
 )
-from graphrag.neo4j_store import create_neo4j_driver, create_neo4j_schema
+from Neo4j.neo4j_store import create_neo4j_driver, create_neo4j_schema
 from graphrag.pipeline import CompositeDocumentProcessingPipeline
 
 from graphrag.documents import (

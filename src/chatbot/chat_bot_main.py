@@ -6,7 +6,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
-from graphrag.chatbot.agent import BaselineAgent, GraphRAGAgent, HistoryMessage
+from chatbot.agent import BaselineAgent, GraphRAGAgent, HistoryMessage
 
 
 logger = logging.getLogger(__name__)

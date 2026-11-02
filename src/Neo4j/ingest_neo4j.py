@@ -5,7 +5,7 @@ from pathlib import Path
 
 from graphrag.config import settings
 from graphrag.embeddings import get_chunk_embedding
-from graphrag.neo4j_store import (
+from Neo4j.neo4j_store import (
     create_neo4j_driver,
     create_neo4j_schema,
     store_chunk,

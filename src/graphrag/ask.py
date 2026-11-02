@@ -3,7 +3,7 @@ import json
 import sys
 from dataclasses import asdict
 
-from graphrag.chatbot.agent import BaselineAgent, GraphRAGAgent
+from chatbot.agent import BaselineAgent, GraphRAGAgent
 
 
 def main(argv=None) -> int:
