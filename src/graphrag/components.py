@@ -3,7 +3,7 @@ from pathlib import PurePosixPath
 
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobClient
-from database_mcp.client import DatabaseMcpClient
+from graphrag.database_mcp.client import DatabaseMcpClient
 from graphrag.config import settings
 from graphrag.embeddings import get_chunk_embedding
 from graphrag.pipeline import (

@@ -1,8 +1,8 @@
 import argparse
 
 from graphrag.config import settings
-from database_mcp.client import DatabaseMcpClient
-from database_mcp.config import database_mcp_url
+from graphrag.database_mcp.client import DatabaseMcpClient
+from graphrag.database_mcp.config import database_mcp_url
 
 
 def main(argv=None) -> int:

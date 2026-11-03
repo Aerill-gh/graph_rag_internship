@@ -4,7 +4,7 @@ from functools import partial
 
 from azure.identity import DefaultAzureCredential
 
-from database_mcp.client import DatabaseMcpClient
+from graphrag.database_mcp.client import DatabaseMcpClient
 from graphrag.components import (
     AzureBlobDocumentLoader,
     ZavaDocumentParser,

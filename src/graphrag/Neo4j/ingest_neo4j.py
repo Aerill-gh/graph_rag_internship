@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from database_mcp.client import DatabaseMcpClient
+from graphrag.database_mcp.client import DatabaseMcpClient
 from graphrag.config import PROJECT_ROOT, settings
 from graphrag.embeddings import get_chunk_embedding
 

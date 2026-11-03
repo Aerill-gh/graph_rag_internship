@@ -52,8 +52,8 @@ def create_mcp_server(backend: DatabaseBackend | None = None) -> FastMCP:
     async def lifespan(server: FastMCP) -> AsyncIterator[None]:
         nonlocal active_backend
         if active_backend is None:
-            from database_mcp.config import load_database_settings
-            from database_mcp.neo4j_backend import Neo4jBackend
+            from graphrag.database_mcp.config import load_database_settings
+            from graphrag.database_mcp.neo4j_backend import Neo4jBackend
 
             active_backend = Neo4jBackend(load_database_settings())
         try:

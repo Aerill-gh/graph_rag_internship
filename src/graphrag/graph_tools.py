@@ -1,5 +1,5 @@
-from database_mcp.client import DatabaseMcpClient
-from database_mcp.contracts import (
+from graphrag.database_mcp.client import DatabaseMcpClient
+from graphrag.database_mcp.contracts import (
     DOMAIN_PATTERNS,
     ENTITY_LABELS,
     ExploreEntityRequest,

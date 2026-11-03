@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from database_mcp.client import DatabaseMcpClient
+from graphrag.database_mcp.client import DatabaseMcpClient
 from graphrag.config import PROJECT_ROOT, settings
 from graphrag.graph_extraction import extract_chunk, merge_duplicate_entities
 from graphrag.embeddings import get_chunk_embedding

@@ -16,7 +16,7 @@ class SearchResponse(BaseModel):
 
 def retrieve_documents(question: str) -> list[DocumentPassage]:
     # Keep this compatibility endpoint behind the database MCP boundary as well.
-    from chatbot.tools import search_documents
+    from graphrag.tools import search_documents
 
     return [
         DocumentPassage(
