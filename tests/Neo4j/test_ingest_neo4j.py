@@ -2,11 +2,31 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
 
-from scripts.ingest_neo4j import load_chunks
+from Neo4j.ingest_neo4j import load_chunks, main
 
 
 class LoadChunksTests(unittest.TestCase):
+    def test_main_routes_ingestion_through_mcp(self):
+        chunks = [{"chunk_id": "one"}]
+        with (
+            patch("Neo4j.ingest_neo4j.load_chunks", return_value=chunks) as load,
+            patch("Neo4j.ingest_neo4j.DatabaseMcpClient") as factory,
+            patch("Neo4j.ingest_neo4j.get_chunk_embedding", return_value=[0.1]),
+            patch("Neo4j.ingest_neo4j.settings") as configuration,
+        ):
+            configuration.azure_openai_embedding_deployment = "test-embedding"
+            client = Mock()
+            factory.return_value.__enter__.return_value = client
+            main(["--limit", "1"])
+        self.assertEqual(load.call_args.args[1], 1)
+        client.health_check.assert_called_once()
+        client.ensure_schema.assert_called_once()
+        client.store_chunk.assert_called_once_with(
+            chunks[0], [0.1], embedding_model="test-embedding",
+        )
+
     def test_loads_all_chunk_files_in_stable_order(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
