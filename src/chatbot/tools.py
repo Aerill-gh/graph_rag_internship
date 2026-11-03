@@ -1,6 +1,6 @@
-from database_mcp.client import DatabaseMcpClient
-from database_mcp.contracts import DOMAIN_PATTERNS, ENTITY_LABELS
-from graphrag.embeddings import generate_embedding
+from graphrag.database_mcp.client import DatabaseMcpClient
+from graphrag.database_mcp.contracts import DOMAIN_PATTERNS, ENTITY_LABELS
+from chatbot.embeddings import generate_embedding
 
 
 SEARCH_DOCUMENTS_DESCRIPTION = (

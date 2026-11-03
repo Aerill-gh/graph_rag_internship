@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from chatbot import chat_bot_main
 from chatbot.agent import AgentAnswer
 from chatbot.chat_store import ChatStore
-from database_mcp.client import DatabaseMcpError
+from graphrag.database_mcp.client import DatabaseMcpError
 
 
 SOURCE = {

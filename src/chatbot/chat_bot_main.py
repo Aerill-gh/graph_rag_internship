@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 from chatbot.agent import BaselineAgent, GraphRAGAgent, HistoryMessage
 from chatbot.chat_store import ChatStore
 from chatbot.languages import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language
-from database_mcp.client import DatabaseMcpError
+from graphrag.database_mcp.client import DatabaseMcpError
 
 
 logger = logging.getLogger(__name__)

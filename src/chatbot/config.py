@@ -16,8 +16,51 @@ class ChatSettings:
     use_documents: bool = True
 
 
-def load_chat_settings() -> ChatSettings:
+@dataclass(frozen=True)
+class FoundrySettings:
+    """Foundry project configuration for the chatbot agent."""
+    project_endpoint: str
+    chat_deployment: str
+
+
+def _load_env() -> None:
+    """Load environment variables from .env file."""
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
+
+def _required(name: str) -> str:
+    """Get a required environment variable, raise error if missing."""
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(
+            f"Missing {name}. Add it to the .env file."
+        )
+    return value
+
+
+def get_foundry_endpoint() -> str:
+    """Get Foundry project endpoint."""
+    _load_env()
+    return _required("FOUNDRY_PROJECT_ENDPOINT")
+
+
+def get_foundry_chat_deployment() -> str:
+    """Get Foundry chat model deployment name."""
+    _load_env()
+    return _required("FOUNDRY_CHAT_DEPLOYMENT")
+
+
+def load_foundry_settings() -> FoundrySettings:
+    """Load Foundry settings for the chatbot agent."""
+    return FoundrySettings(
+        project_endpoint=get_foundry_endpoint(),
+        chat_deployment=get_foundry_chat_deployment(),
+    )
+
+
+def load_chat_settings() -> ChatSettings:
+    """Load chat backend settings."""
+    _load_env()
     backend = os.getenv("CHATBOT_BACKEND", "foundry").strip().lower()
     if backend not in ("foundry", "langchain"):
         raise ValueError("CHATBOT_BACKEND must be 'foundry' or 'langchain'.")

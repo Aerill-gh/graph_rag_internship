@@ -10,7 +10,7 @@ from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import FunctionTool, PromptAgentDefinition
 from azure.identity import DefaultAzureCredential
 
-from graphrag.config import FoundrySettings, settings
+from chatbot.config import FoundrySettings, load_foundry_settings
 from chatbot.languages import (
     DEFAULT_LANGUAGE,
     LANGUAGE_INSTRUCTION_NAMES,
@@ -121,7 +121,7 @@ class BaselineAgent:
     ) -> None:
         if type(max_tool_calls) is not int or not 1 <= max_tool_calls <= 10:
             raise ValueError("max_tool_calls must be between 1 and 10.")
-        self.configuration = configuration or settings.foundry
+        self.configuration = configuration or load_foundry_settings()
         self.max_tool_calls = max_tool_calls
 
     def tool_definitions(self) -> list[FunctionTool]:
