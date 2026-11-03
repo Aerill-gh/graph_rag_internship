@@ -1,10 +1,6 @@
-import json
-
-from graphrag.config import settings
+from database_mcp.client import DatabaseMcpClient
+from database_mcp.contracts import DOMAIN_PATTERNS, ENTITY_LABELS
 from graphrag.embeddings import generate_embedding
-from Neo4j.neo4j_store import VECTOR_INDEX_NAME, create_neo4j_driver
-from graphrag.graph_tools import DOMAIN_PATTERNS, explore_entity, find_entities, query_graph
-from Neo4j.neo4j_store import ENTITY_LABELS
 
 
 SEARCH_DOCUMENTS_DESCRIPTION = (
@@ -71,42 +67,44 @@ def run_graph_tool(name: str, arguments: dict) -> dict:
         entity_name, label, limit = arguments["name"], arguments["label"], arguments["limit"]
         if label not in ENTITY_LABELS or type(limit) is not int or not 1 <= limit <= 50:
             raise ValueError("Invalid entity label or result limit.")
-        candidates = [candidate for candidate in find_entities(entity_name)
-                      if label in candidate["labels"]]
-        exact = [candidate for candidate in candidates
-                 if candidate["name"].casefold() == entity_name.strip().casefold()]
-        selected = exact or candidates
-        if len(selected) != 1:
-            return {"passages": [], "candidates": candidates, "ambiguous": len(selected) > 1}
-        rows = explore_entity(selected[0]["name"], label, limit)
-        return {"passages": _graph_passages(rows), "potentially_truncated": len(rows) == limit}
+        with DatabaseMcpClient() as client:
+            candidates = [
+                candidate.model_dump()
+                for candidate in client.find_entities(entity_name).candidates
+                if label in candidate.labels
+            ]
+            exact = [candidate for candidate in candidates
+                     if candidate["name"].casefold() == entity_name.strip().casefold()]
+            selected = exact or candidates
+            if len(selected) != 1:
+                return {"passages": [], "candidates": candidates, "ambiguous": len(selected) > 1}
+            response = client.explore_entity(selected[0]["name"], label, limit)
+        return {
+            "passages": _graph_passages([fact.model_dump() for fact in response.facts]),
+            "potentially_truncated": response.truncated,
+        }
     pattern = arguments["pattern"]
     allowed = {"|".join(pattern): pattern for pattern in DOMAIN_PATTERNS}
     if not isinstance(pattern, str) or pattern not in allowed:
         raise ValueError("Unsupported directed graph pattern.")
-    result = query_graph(
-        *allowed[pattern], source_names=arguments["source_names"],
-        target_name=arguments["target_name"], match_mode=arguments["match_mode"],
-        limit=arguments["limit"],
-    )
-    return {"passages": _graph_passages(result.pop("facts")), **result}
-
-
-SEARCH_CHUNKS_QUERY = """
-CALL db.index.vector.queryNodes($index_name, $top_k, $embedding)
-YIELD node AS chunk, score
-RETURN chunk.chunk_id AS chunk_id,
-       chunk.source_document AS source_document,
-       chunk.pages AS pages,
-       chunk.text AS text,
-       chunk.figures_json AS figures_json,
-       score
-ORDER BY score DESC
-"""
+    with DatabaseMcpClient() as client:
+        result = client.query_graph(
+            pattern, source_names=arguments["source_names"],
+            target_name=arguments["target_name"], match_mode=arguments["match_mode"],
+            limit=arguments["limit"],
+        )
+    return {
+        "passages": _graph_passages([fact.model_dump() for fact in result.facts]),
+        "cypher": result.cypher,
+        "parameters": result.parameters,
+        "result_limit": result.result_limit,
+        "truncated": result.truncated,
+        "scope": result.scope,
+    }
 
 
 def search_documents(question: str, top_k: int = 5) -> list[dict]:
-    """Embed a question and return source-linked chunks from Neo4j."""
+    """Embed a question and retrieve source-linked chunks through database MCP."""
     if not isinstance(question, str) or not question.strip():
         raise ValueError("Question must be a nonempty string.")
     if type(top_k) is not int or not 1 <= top_k <= 100:
@@ -116,18 +114,6 @@ def search_documents(question: str, top_k: int = 5) -> list[dict]:
     if not embedding:
         raise ValueError("Question embedding must not be empty.")
 
-    with create_neo4j_driver() as driver:
-        with driver.session(database=settings.neo4j.database) as session:
-            rows = session.run(
-                SEARCH_CHUNKS_QUERY,
-                index_name=VECTOR_INDEX_NAME,
-                top_k=top_k,
-                embedding=embedding,
-            ).data()
-
-    passages = []
-    for row in rows:
-        passage = dict(row)
-        passage["figures"] = json.loads(passage.pop("figures_json", None) or "[]")
-        passages.append(passage)
-    return passages
+    with DatabaseMcpClient() as client:
+        response = client.search_documents(embedding, top_k)
+    return [passage.model_dump() for passage in response.passages]

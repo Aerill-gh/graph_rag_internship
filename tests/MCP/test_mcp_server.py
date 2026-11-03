@@ -101,9 +101,15 @@ class TestRetrievalAdapter(unittest.TestCase):
     def test_delegates_and_normalizes_search_results(self):
         retrieval = Mock()
         retrieval.search_documents.return_value = [
-            {**PASSAGE.model_dump(), "score": 0.9},
+            {
+                "chunk_id": PASSAGE.chunk_id,
+                "source_document": PASSAGE.document,
+                "pages": PASSAGE.pages,
+                "text": PASSAGE.text,
+                "score": 0.9,
+            },
         ]
-        with patch.dict("sys.modules", {"graphrag.tools": retrieval}):
+        with patch.dict("sys.modules", {"chatbot.tools": retrieval}):
             self.assertEqual(retrieve_documents("Example question"), [PASSAGE])
         retrieval.search_documents.assert_called_once_with("Example question")
 

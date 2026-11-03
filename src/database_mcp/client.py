@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from contextlib import ExitStack, asynccontextmanager
 from functools import partial
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 from anyio.from_thread import BlockingPortal, start_blocking_portal
 from mcp import ClientSession
@@ -18,14 +18,27 @@ from database_mcp.contracts import (
     ChunkReadResponse,
     ChunkWrite,
     ChunkWriteResponse,
+    CorpusSummaryResponse,
+    ExploreEntityRequest,
+    ExploreEntityResponse,
     ExtractionWrite,
     ExtractionWriteResponse,
+    FindEntitiesRequest,
+    FindEntitiesResponse,
     HealthResponse,
+    QueryGraphRequest,
+    QueryGraphResponse,
     SchemaResponse,
+    SearchDocumentsRequest,
+    SearchDocumentsResponse,
 )
 
 
 Response = TypeVar("Response", bound=BaseModel)
+
+
+class DatabaseMcpError(RuntimeError):
+    """The database MCP service failed or returned an invalid tool response."""
 
 
 class DatabaseMcpClient:
@@ -79,16 +92,21 @@ class DatabaseMcpClient:
             partial(self._session.call_tool, name, arguments=arguments)
         )
         if result.isError:
-            raise RuntimeError(
+            raise DatabaseMcpError(
                 f"Database MCP tool {name} failed. Check the database MCP server."
             )
-        if result.structuredContent is not None:
-            payload = result.structuredContent
-        else:
-            if len(result.content) != 1 or result.content[0].type != "text":
-                raise ValueError(f"Database MCP tool {name} returned invalid content.")
-            payload = json.loads(result.content[0].text)
-        return response_type.model_validate(payload)
+        try:
+            if result.structuredContent is not None:
+                payload = result.structuredContent
+            else:
+                if len(result.content) != 1 or result.content[0].type != "text":
+                    raise ValueError("MCP response must contain one JSON text block.")
+                payload = json.loads(result.content[0].text)
+            return response_type.model_validate(payload)
+        except (TypeError, ValueError) as exc:
+            raise DatabaseMcpError(
+                f"Database MCP tool {name} returned an invalid response."
+            ) from exc
 
     def health_check(self) -> HealthResponse:
         return self._call("health_check", {}, HealthResponse)
@@ -130,6 +148,39 @@ class DatabaseMcpClient:
         if response.chunk.chunk_id != chunk_id:
             raise ValueError("Database MCP returned a different source chunk.")
         return response
+
+    def search_documents(
+        self, embedding: list[float], top_k: int = 5,
+    ) -> SearchDocumentsResponse:
+        request = SearchDocumentsRequest(embedding=embedding, top_k=top_k)
+        return self._call("search_documents", request.model_dump(), SearchDocumentsResponse)
+
+    def find_entities(self, name: str, limit: int = 10) -> FindEntitiesResponse:
+        request = FindEntitiesRequest(name=name, limit=limit)
+        return self._call("find_entities", request.model_dump(), FindEntitiesResponse)
+
+    def explore_entity(
+        self, name: str, label: str, limit: int = 20,
+    ) -> ExploreEntityResponse:
+        request = ExploreEntityRequest(name=name, label=label, limit=limit)
+        return self._call("explore_entity", request.model_dump(), ExploreEntityResponse)
+
+    def query_graph(
+        self,
+        pattern: str,
+        source_names: list[str],
+        target_name: str = "",
+        match_mode: Literal["any", "all", "difference"] = "any",
+        limit: int = 20,
+    ) -> QueryGraphResponse:
+        request = QueryGraphRequest(
+            pattern=pattern, source_names=source_names, target_name=target_name,
+            match_mode=match_mode, limit=limit,
+        )
+        return self._call("query_graph", request.model_dump(), QueryGraphResponse)
+
+    def corpus_summary(self) -> CorpusSummaryResponse:
+        return self._call("corpus_summary", {}, CorpusSummaryResponse)
 
 
 def main() -> None:

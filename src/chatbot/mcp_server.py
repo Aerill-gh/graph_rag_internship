@@ -15,10 +15,18 @@ class SearchResponse(BaseModel):
 
 
 def retrieve_documents(question: str) -> list[DocumentPassage]:
-    # Load retrieval only when called, so MCP discovery needs no Azure credentials.
-    from graphrag.tools import search_documents
+    # Keep this compatibility endpoint behind the database MCP boundary as well.
+    from chatbot.tools import search_documents
 
-    return [DocumentPassage.model_validate(result) for result in search_documents(question)]
+    return [
+        DocumentPassage(
+            chunk_id=result["chunk_id"],
+            document=result["source_document"],
+            pages=result["pages"],
+            text=result["text"],
+        )
+        for result in search_documents(question)
+    ]
 
 
 def create_mcp_server(

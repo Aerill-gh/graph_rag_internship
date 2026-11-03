@@ -1,8 +1,6 @@
 
 import json
 
-from neo4j import GraphDatabase
-
 from graphrag.config import settings
 from graphrag.ontology import ALLOWED_RELATIONSHIPS, NODE_TYPES
 
@@ -128,12 +126,3 @@ def store_extraction(session, chunk_id: str, extraction: dict) -> None:
             ).consume()
 
     session.execute_write(persist)
-
-
-def create_neo4j_driver():
-    """Create a Neo4j driver using project settings."""
-    neo4j_settings = settings.neo4j
-    return GraphDatabase.driver(
-        neo4j_settings.uri,
-        auth=(neo4j_settings.username, neo4j_settings.password),
-    )

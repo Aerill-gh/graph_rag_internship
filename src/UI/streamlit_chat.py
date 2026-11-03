@@ -9,14 +9,16 @@ from urllib.request import Request, urlopen
 import streamlit as st
 from dotenv import load_dotenv
 
+from chatbot.languages import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language
+from UI.locales import error_text, text
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CHAT_API_URL = "http://127.0.0.1:8000/chat"
 DEFAULT_BACKEND_API_URL = "http://127.0.0.1:8000"
 REQUEST_TIMEOUT_SECONDS = 120
 SOURCES_SEPARATOR = "\n\nSources:\n"
-# Labels shown in the sidebar switch and on each answer.
-AGENT_MODES = {"baseline": "Baseline", "graphrag": "GraphRAG"}
+AGENT_MODES = ("baseline", "graphrag")
 MAX_TITLE_LENGTH = 60
 MAX_PINNED_CHATS = 3
 logger = logging.getLogger(__name__)
@@ -54,6 +56,7 @@ class Conversation:
     id: str
     title: str
     pinned: bool
+    language: Language = DEFAULT_LANGUAGE
 
 
 def get_chat_api_url() -> str:
@@ -113,7 +116,10 @@ def list_conversations() -> list[Conversation]:
     try:
         result = _make_backend_request("GET", "/conversations")
         return [
-            Conversation(id=item["id"], title=item["title"], pinned=item["pinned"])
+            Conversation(
+                id=item["id"], title=item["title"], pinned=item["pinned"],
+                language=item.get("language", DEFAULT_LANGUAGE),
+            )
             for item in result
         ]
     except ChatServiceError:
@@ -127,7 +133,10 @@ def create_conversation() -> Conversation:
     """Create a new conversation on the backend."""
     try:
         result = _make_backend_request("POST", "/conversations")
-        return Conversation(id=result["id"], title=result["title"], pinned=result["pinned"])
+        return Conversation(
+            id=result["id"], title=result["title"], pinned=result["pinned"],
+            language=result.get("language", DEFAULT_LANGUAGE),
+        )
     except ChatServiceError:
         raise
     except Exception as exc:
@@ -153,7 +162,10 @@ def rename_conversation(conversation_id: str, title: str) -> Conversation:
         result = _make_backend_request(
             "PATCH", f"/conversations/{conversation_id}", data={"title": title}
         )
-        return Conversation(id=result["id"], title=result["title"], pinned=result["pinned"])
+        return Conversation(
+            id=result["id"], title=result["title"], pinned=result["pinned"],
+            language=result.get("language", DEFAULT_LANGUAGE),
+        )
     except ChatServiceError:
         raise
     except Exception as exc:
@@ -167,12 +179,38 @@ def set_conversation_pinned(conversation_id: str, pinned: bool) -> Conversation:
         result = _make_backend_request(
             "PATCH", f"/conversations/{conversation_id}", data={"pinned": pinned}
         )
-        return Conversation(id=result["id"], title=result["title"], pinned=result["pinned"])
+        return Conversation(
+            id=result["id"], title=result["title"], pinned=result["pinned"],
+            language=result.get("language", DEFAULT_LANGUAGE),
+        )
     except ChatServiceError:
         raise
     except Exception as exc:
         logger.error("Failed to update conversation (%s).", type(exc).__name__)
         raise ChatServiceError("Cannot update chat. Please try again.") from None
+
+
+def set_conversation_language(conversation_id: str, language: Language) -> Conversation:
+    """Persist the selected language for one conversation."""
+    try:
+        result = _make_backend_request(
+            "PATCH", f"/conversations/{conversation_id}", data={"language": language}
+        )
+        conversation = Conversation(
+            id=result["id"], title=result["title"], pinned=result["pinned"],
+            language=result.get("language", DEFAULT_LANGUAGE),
+        )
+    except ChatServiceError:
+        raise
+    except Exception as exc:
+        logger.error("Failed to update conversation language (%s).", type(exc).__name__)
+        raise ChatServiceError("Cannot update chat. Please try again.") from None
+    if conversation.language != language:
+        raise ChatServiceError(
+            "The chat service did not save the selected language. "
+            "Restart the chatbot API, then try again."
+        )
+    return conversation
 
 
 def delete_conversation(conversation_id: str) -> None:
@@ -201,14 +239,17 @@ def chat_with_bot(
     history: list[dict[str, str]] | None = None,
     mode: str = "baseline",
     conversation_id: str | None = None,
+    language: Language = DEFAULT_LANGUAGE,
 ) -> ChatAnswer:
     """Send one question to the chatbot API and return its answer."""
     if not question.strip():
         raise ValueError("Question cannot be blank.")
     if mode not in AGENT_MODES:
         raise ValueError(f"Unknown agent mode: {mode}")
+    if language not in LANGUAGE_NAMES:
+        raise ValueError(f"Unknown response language: {language}")
 
-    body: dict[str, object] = {"message": question, "mode": mode}
+    body: dict[str, object] = {"message": question, "mode": mode, "language": language}
     if history is not None:
         body["history"] = history
     if conversation_id is not None:
@@ -275,78 +316,100 @@ def _error_detail(exc: HTTPError) -> str | None:
     return detail if isinstance(detail, str) and detail.strip() else None
 
 
-def _render_answer(answer: str, mode: str | None = None) -> None:
+def _render_answer(
+    answer: str, mode: str | None = None, language: Language = DEFAULT_LANGUAGE,
+) -> None:
     """Show which agent answered, the answer, and its sources in an expandable section."""
     if mode in AGENT_MODES:
-        st.caption(f":material/smart_toy: {AGENT_MODES[mode]}")
+        st.caption(f":material/smart_toy: {text(mode, language)}")
     parts = answer.split(SOURCES_SEPARATOR, 1)
     st.markdown(parts[0])
     if len(parts) == 2:
-        with st.expander("Sources"):
-            st.markdown(parts[1])
+        with st.expander(text("sources", language)):
+            source_details = parts[1]
+            source_details = source_details.replace(", pages ", f", {text('pages', language)} ")
+            source_details = source_details.replace(", chunk ", f", {text('chunk', language)} ")
+            source_details = source_details.replace(
+                "Tools used:", f"{text('tools_used', language)}:"
+            )
+            st.markdown(source_details)
 
 
 def _dismiss_chat_dialog() -> None:
     st.session_state.pop("chat_dialog", None)
 
 
-@st.dialog("Rename chat", on_dismiss=_dismiss_chat_dialog)
-def _rename_chat_dialog(chat: Conversation) -> None:
-    with st.form(f"rename_form_{chat.id}"):
-        name = st.text_input("Chat name", value=chat.title, max_chars=MAX_TITLE_LENGTH)
-        save = st.form_submit_button("Save", use_container_width=True)
-    if save:
-        try:
-            rename_conversation(chat.id, name)
-        except ChatServiceError as exc:
-            st.error(str(exc))
-        else:
+def _rename_chat_dialog(chat: Conversation, language: Language) -> None:
+    @st.dialog(text("rename_title", language), on_dismiss=_dismiss_chat_dialog)
+    def render_dialog() -> None:
+        with st.form(f"rename_form_{chat.id}"):
+            name = st.text_input(
+                text("chat_name", language), value=chat.title, max_chars=MAX_TITLE_LENGTH,
+            )
+            save = st.form_submit_button(text("save", language), use_container_width=True)
+        if save:
+            try:
+                rename_conversation(chat.id, name)
+            except ChatServiceError as exc:
+                st.error(error_text(str(exc), language))
+            else:
+                _dismiss_chat_dialog()
+                st.rerun()
+        if st.button(
+            text("cancel", language), key=f"cancel_rename_{chat.id}", use_container_width=True,
+        ):
             _dismiss_chat_dialog()
             st.rerun()
-    if st.button("Cancel", key=f"cancel_rename_{chat.id}", use_container_width=True):
-        _dismiss_chat_dialog()
-        st.rerun()
+
+    render_dialog()
 
 
-@st.dialog("Delete chat?", on_dismiss=_dismiss_chat_dialog)
-def _delete_chat_dialog(chat: Conversation) -> None:
-    st.write(f'Delete "{chat.title}" and its saved messages? This cannot be undone.')
-    cancel, delete = st.columns(2)
-    if cancel.button("Cancel", key=f"cancel_delete_{chat.id}", use_container_width=True):
-        _dismiss_chat_dialog()
-        st.rerun()
-    if delete.button(
-        "Delete", key=f"confirm_delete_{chat.id}", type="primary", use_container_width=True,
-    ):
-        try:
-            delete_conversation(chat.id)
-        except ChatServiceError as exc:
-            st.error(str(exc))
-        else:
+def _delete_chat_dialog(chat: Conversation, language: Language) -> None:
+    @st.dialog(text("delete_title", language), on_dismiss=_dismiss_chat_dialog)
+    def render_dialog() -> None:
+        st.write(text("delete_message", language).format(title=chat.title))
+        cancel, delete = st.columns(2)
+        if cancel.button(
+            text("cancel", language), key=f"cancel_delete_{chat.id}", use_container_width=True,
+        ):
             _dismiss_chat_dialog()
-            if chat.id == st.session_state.get("active_chat_id"):
-                st.session_state.pop("active_chat_id", None)
-                st.session_state.pop("pending_prompt", None)
             st.rerun()
+        if delete.button(
+            text("confirm_delete", language), key=f"confirm_delete_{chat.id}",
+            type="primary", use_container_width=True,
+        ):
+            try:
+                delete_conversation(chat.id)
+            except ChatServiceError as exc:
+                st.error(error_text(str(exc), language))
+            else:
+                _dismiss_chat_dialog()
+                if chat.id == st.session_state.get("active_chat_id"):
+                    st.session_state.pop("active_chat_id", None)
+                    st.session_state.pop("pending_prompt", None)
+                st.rerun()
+
+    render_dialog()
 
 
 def _render_chat_list(
-    chats: list[Conversation], active_id: str,
+    chats: list[Conversation], active_id: str, language: Language,
 ) -> tuple[str, Conversation] | None:
     action = None
     if st.button(
-        "New chat", icon=":material/edit_square:", key="new_chat", use_container_width=True,
+        text("new_chat", language), icon=":material/edit_square:", key="new_chat",
+        use_container_width=True,
     ):
         try:
             new_chat = create_conversation()
             st.session_state.active_chat_id = new_chat.id
         except ChatServiceError as exc:
-            st.error(str(exc))
+            st.error(error_text(str(exc), language))
         st.session_state.pop("pending_prompt", None)
         st.rerun()
 
     pin_count = sum(chat.pinned for chat in chats)
-    st.caption("Chats")
+    st.caption(text("chats", language))
     for chat in chats:
         row_key = "chat_row_active" if chat.id == active_id else "chat_row"
         with st.container(key=f"{row_key}_{chat.id}"):
@@ -363,43 +426,43 @@ def _render_chat_list(
                 st.rerun()
             with actions.popover("⋯", use_container_width=True):
                 if st.button(
-                    "Unpin" if chat.pinned else "Pin",
+                    text("unpin" if chat.pinned else "pin", language),
                     icon=":material/keep_off:" if chat.pinned else ":material/keep:",
                     key=f"pin_{chat.id}",
                     disabled=not chat.pinned and pin_count >= MAX_PINNED_CHATS,
-                    help="Maximum three pinned chats. Unpin one first."
+                    help=text("pin_limit", language)
                     if not chat.pinned and pin_count >= MAX_PINNED_CHATS else None,
                     use_container_width=True,
                 ):
                     try:
                         set_conversation_pinned(chat.id, not chat.pinned)
                     except ChatServiceError as exc:
-                        st.error(str(exc))
+                        st.error(error_text(str(exc), language))
                     else:
                         st.rerun()
                 if st.button(
-                    "Rename", icon=":material/edit:", key=f"rename_{chat.id}",
+                    text("rename", language), icon=":material/edit:", key=f"rename_{chat.id}",
                     use_container_width=True,
                 ):
                     action = ("rename", chat)
                 if st.button(
-                    "Delete", icon=":material/delete:", key=f"delete_{chat.id}",
+                    text("delete", language), icon=":material/delete:", key=f"delete_{chat.id}",
                     use_container_width=True,
                 ):
                     action = ("delete", chat)
     return action
 
 
-def _storage_error() -> None:
+def _storage_error(language: Language = DEFAULT_LANGUAGE) -> None:
     logger.exception("Backend chat service is unavailable.")
-    st.error("Cannot reach the chat backend service. Ensure it's running on the configured URL.")
+    st.error(text("error_storage", language))
 
 
 def main() -> None:
     try:
         _main()
     except ChatServiceError:
-        _storage_error()
+        _storage_error(st.session_state.get("active_language", DEFAULT_LANGUAGE))
         st.stop()
 
 
@@ -409,7 +472,7 @@ def _main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     st.set_page_config(
-        page_title="Zava Assistant",
+        page_title=text("page_title", st.session_state.get("active_language", DEFAULT_LANGUAGE)),
         page_icon="💬",
         layout="centered",
         initial_sidebar_state="expanded",
@@ -513,7 +576,7 @@ def _main() -> None:
     try:
         chats = list_conversations()
     except ChatServiceError:
-        _storage_error()
+        _storage_error(st.session_state.get("active_language", DEFAULT_LANGUAGE))
         st.stop()
     
     if not chats:
@@ -521,36 +584,53 @@ def _main() -> None:
             new_chat = create_conversation()
             chats = [new_chat]
         except ChatServiceError:
-            _storage_error()
+            _storage_error(st.session_state.get("active_language", DEFAULT_LANGUAGE))
             st.stop()
     
     if st.session_state.get("active_chat_id") not in {chat.id for chat in chats}:
         st.session_state.active_chat_id = chats[0].id
     active_id = st.session_state.active_chat_id
     active = next(chat for chat in chats if chat.id == active_id)
+    language = active.language
+    st.session_state.active_language = language
     
     try:
         messages = get_conversation_messages(active_id)
     except ChatServiceError:
-        _storage_error()
+        _storage_error(language)
         st.stop()
 
     with st.sidebar:
         with st.container(key="sidebar_logo"):
             st.image(str(PROJECT_ROOT / "UI" / "assets" / "zava_logo.png"), width="stretch")
-        st.caption("Ask questions about company roles, policies, and benefits.")
+        st.caption(text("sidebar_intro", language))
         # Same agent and instructions in both modes; GraphRAG only adds graph tools.
         mode = st.radio(
-            "Agent",
+            text("agent", language),
             options=list(AGENT_MODES),
-            format_func=AGENT_MODES.get,
+            format_func=lambda value: text(value, language),
             horizontal=True,
             key="agent_mode",
-            captions=["Document search only", "Documents + knowledge graph"],
+            captions=[text("baseline_caption", language), text("graphrag_caption", language)],
         )
-        action = _render_chat_list(chats, active_id)
+        selected_language = st.selectbox(
+            text("language", language),
+            options=list(LANGUAGE_NAMES),
+            format_func=lambda value: LANGUAGE_NAMES[value],
+            index=list(LANGUAGE_NAMES).index(language),
+            key=f"language_{active_id}",
+        )
+        if selected_language != language:
+            try:
+                set_conversation_language(active_id, selected_language)
+            except ChatServiceError as exc:
+                st.error(error_text(str(exc), language))
+            else:
+                st.session_state.active_language = selected_language
+                st.rerun()
+        action = _render_chat_list(chats, active_id, language)
         st.divider()
-        st.caption("Answers may be incomplete. Check the cited source passages.")
+        st.caption(text("answers_note", language))
 
     if action is not None:
         kind, chat = action
@@ -561,50 +641,49 @@ def _main() -> None:
         if dialog_chat is None:
             _dismiss_chat_dialog()
         elif kind == "rename":
-            _rename_chat_dialog(dialog_chat)
+            _rename_chat_dialog(dialog_chat, language)
         else:
-            _delete_chat_dialog(dialog_chat)
+            _delete_chat_dialog(dialog_chat, language)
 
-    st.markdown('<div class="zava-kicker">Zava · Employee knowledge assistant</div>',
+    st.markdown(f'<div class="zava-kicker">{text("kicker", language)}</div>',
                 unsafe_allow_html=True)
-    st.title(active.title if messages else "How can I help?")
+    st.title(active.title if messages else text("empty_title", language))
     st.markdown(
-        '<p class="zava-subtitle">Ask about Zava roles, workplace policies, '
-        "and employee benefits.</p>",
+        f'<p class="zava-subtitle">{text("subtitle", language)}</p>',
         unsafe_allow_html=True,
     )
 
     for message in messages:
         with st.chat_message(message["role"]):
             if message["role"] == "assistant":
-                _render_answer(message["content"], message.get("mode"))
+                _render_answer(message["content"], message.get("mode"), language)
             else:
                 st.markdown(message["content"])
 
     if error := st.session_state.pop("chat_error", None):
-        st.error(error)
+        st.error(error_text(error, language))
 
     if not messages:
-        st.markdown("#### Try a question")
+        st.markdown(f"#### {text('try_question', language)}")
         suggestions = [
-            "How often are performance reviews conducted?",
-            "What does Northwind Health Plus cover?",
-            "What qualifications does the CFO role require?",
+            text("suggestion_reviews", language),
+            text("suggestion_health", language),
+            text("suggestion_cfo", language),
         ]
         columns = st.columns(len(suggestions))
         for column, suggestion in zip(columns, suggestions):
             if column.button(suggestion, use_container_width=True, key=suggestion):
                 st.session_state.pending_prompt = suggestion
 
-    prompt = st.chat_input("Ask a question about Zava...")
+    prompt = st.chat_input(text("chat_input", language))
     prompt = st.session_state.pop("pending_prompt", None) or prompt
     if prompt:
         with st.chat_message("user"):
             st.markdown(prompt)
         with st.chat_message("assistant"):
             spinner = (
-                "Searching documents and the knowledge graph..." if mode == "graphrag"
-                else "Searching Zava documents and preparing an answer..."
+                text("spinner_graph", language) if mode == "graphrag"
+                else text("spinner_baseline", language)
             )
             with st.spinner(spinner):
                 try:
@@ -613,11 +692,12 @@ def _main() -> None:
                         history=history_for_api(messages), 
                         mode=mode,
                         conversation_id=active_id,
+                        language=language,
                     )
                 except ChatServiceError as exc:
                     st.session_state.chat_error = str(exc)
                 else:
-                    _render_answer(result.to_saved_text(), result.mode)
+                    _render_answer(result.to_saved_text(), result.mode, language)
         st.rerun()
 
 

@@ -42,14 +42,6 @@ class FoundrySettings:
 
 
 @dataclass(frozen=True)
-class Neo4jSettings:
-    uri: str
-    username: str
-    password: str = field(repr=False)
-    database: str = "neo4j"
-
-
-@dataclass(frozen=True)
 class Settings:
     docintel_endpoint: str = field(
         default_factory=lambda: os.getenv("DOCINTEL_ENDPOINT")
@@ -69,15 +61,6 @@ class Settings:
     @property
     def storage_account_url(self) -> str:
         return f"https://{self.storage_account_name}.blob.core.windows.net"
-
-    @property
-    def neo4j(self) -> Neo4jSettings:
-        return Neo4jSettings(
-            uri=_required_env("NEO4J_URI"),
-            username=_required_env("NEO4J_USERNAME"),
-            password=_required_env("NEO4J_PASSWORD"),
-            database=os.getenv("NEO4J_DATABASE") or "neo4j",
-        )
 
     @property
     def foundry(self) -> FoundrySettings:

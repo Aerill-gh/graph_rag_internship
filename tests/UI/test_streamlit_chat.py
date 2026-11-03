@@ -5,10 +5,55 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
+from chatbot.languages import LANGUAGE_NAMES
 from UI import streamlit_chat
+from UI.locales import TEXT, error_text
 
 
 class TestChatApiClient(unittest.TestCase):
+    def test_locale_catalogs_cover_all_supported_languages_and_keys(self):
+        self.assertEqual(set(TEXT), set(LANGUAGE_NAMES))
+        english_keys = set(TEXT["en"])
+        for language, translations in TEXT.items():
+            with self.subTest(language=language):
+                self.assertEqual(set(translations), english_keys)
+                self.assertTrue(all(translations.values()))
+
+    def test_service_errors_are_localized(self):
+        self.assertEqual(
+            error_text("Cannot rename chat. Please try again.", "de"),
+            TEXT["de"]["error_rename"],
+        )
+
+    def test_selected_language_is_included_when_listing_conversations(self):
+        with patch.object(streamlit_chat, "_make_backend_request", return_value=[{
+            "id": "chat-1", "title": "Saved", "pinned": False, "language": "es",
+        }]):
+            conversations = streamlit_chat.list_conversations()
+
+        self.assertEqual(conversations[0].language, "es")
+
+    def test_language_update_is_persisted_through_backend(self):
+        result = {"id": "chat-1", "title": "Saved", "pinned": False, "language": "lv"}
+        with patch.object(
+            streamlit_chat, "_make_backend_request", return_value=result,
+        ) as request:
+            conversation = streamlit_chat.set_conversation_language("chat-1", "lv")
+
+        self.assertEqual(conversation.language, "lv")
+        request.assert_called_once_with(
+            "PATCH", "/conversations/chat-1", data={"language": "lv"},
+        )
+
+    def test_language_update_rejects_a_backend_that_did_not_save_it(self):
+        with patch.object(streamlit_chat, "_make_backend_request", return_value={
+            "id": "chat-1", "title": "Saved", "pinned": False, "language": "en",
+        }):
+            with self.assertRaisesRegex(
+                streamlit_chat.ChatServiceError, "did not save the selected language",
+            ):
+                streamlit_chat.set_conversation_language("chat-1", "de")
+
     def test_sends_expected_request_and_returns_answer(self):
         response = io.BytesIO(json.dumps({
             "answer": "The policy is in the handbook. [S1]",
@@ -34,10 +79,22 @@ class TestChatApiClient(unittest.TestCase):
         request = urlopen.call_args.args[0]
         self.assertEqual(request.method, "POST")
         self.assertEqual(
-            json.loads(request.data), {"message": "How often are reviews?", "mode": "graphrag"},
+            json.loads(request.data), {
+                "message": "How often are reviews?", "mode": "graphrag", "language": "en",
+            },
         )
         self.assertEqual(request.get_header("Content-type"), "application/json")
         self.assertEqual(urlopen.call_args.kwargs["timeout"], 120)
+
+    def test_selected_language_is_sent_to_the_chat_api(self):
+        response = io.BytesIO(b'{"answer":"Guten Tag."}')
+        with patch.object(streamlit_chat, "urlopen", return_value=response) as urlopen:
+            streamlit_chat.chat_with_bot(
+                "Hallo", "http://127.0.0.1:8000/chat", language="de",
+            )
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(json.loads(request.data)["language"], "de")
 
     def test_answer_without_sources_has_no_sources_block(self):
         response = io.BytesIO(b'{"answer": "I could not find enough information."}')

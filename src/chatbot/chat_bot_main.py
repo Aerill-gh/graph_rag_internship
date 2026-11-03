@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from chatbot.agent import BaselineAgent, GraphRAGAgent, HistoryMessage
 from chatbot.chat_store import ChatStore
+from chatbot.languages import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language
+from database_mcp.client import DatabaseMcpError
 
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,7 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
     history: list[ChatHistoryMessage] | None = None
     mode: AgentMode = "baseline"
+    language: Language = DEFAULT_LANGUAGE
     conversation_id: str | None = None
 
     @field_validator("message")
@@ -61,12 +64,14 @@ class ConversationResponse(BaseModel):
     id: str
     title: str
     pinned: bool
+    language: Language
 
 
 class ConversationUpdateRequest(BaseModel):
     """Update request for conversation title or pinned status."""
     title: str | None = None
     pinned: bool | None = None
+    language: Language | None = None
 
 
 class ConversationMessagesResponse(BaseModel):
@@ -93,7 +98,16 @@ def chat(body: ChatRequest, request: Request) -> ChatResponse:
         HistoryMessage(role=item.role, content=item.content) for item in body.history or []
     ]
     try:
-        result = agent.ask(body.message, history=history)
+        result = agent.ask(body.message, history=history, language=body.language)
+    except DatabaseMcpError as exc:
+        logger.error("%s agent database MCP failed (%s).", body.mode, type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"The {body.mode} agent is unavailable. Check Azure sign-in (az login), "
+                "Foundry settings, and that the database MCP server is running."
+            ),
+        ) from None
     except (ValueError, RuntimeError) as exc:
         # The agent ran but its answer failed a check (missing citations, tool budget, ...).
         logger.error("%s agent returned an invalid answer (%s).", body.mode, type(exc).__name__)
@@ -108,7 +122,7 @@ def chat(body: ChatRequest, request: Request) -> ChatResponse:
             status_code=503,
             detail=(
                 f"The {body.mode} agent is unavailable. Check Azure sign-in (az login), "
-                "Foundry settings, and that Neo4j is running."
+                "Foundry settings, and that the database MCP server is running."
             ),
         ) from None
 
@@ -153,7 +167,9 @@ def list_conversations(request: Request) -> list[ConversationResponse]:
     store = request.app.state.chat_store
     chats = store.list_chats()
     return [
-        ConversationResponse(id=chat.id, title=chat.title, pinned=chat.pinned)
+        ConversationResponse(
+            id=chat.id, title=chat.title, pinned=chat.pinned, language=chat.language,
+        )
         for chat in chats
     ]
 
@@ -164,7 +180,9 @@ def create_conversation(request: Request) -> ConversationResponse:
     store = request.app.state.chat_store
     chat_id = store.create_chat()
     chat = next(c for c in store.list_chats() if c.id == chat_id)
-    return ConversationResponse(id=chat.id, title=chat.title, pinned=chat.pinned)
+    return ConversationResponse(
+        id=chat.id, title=chat.title, pinned=chat.pinned, language=chat.language,
+    )
 
 
 @app.get("/conversations/{conversation_id}/messages", response_model=ConversationMessagesResponse)
@@ -181,15 +199,20 @@ def update_conversation(
 ) -> ConversationResponse:
     """Update conversation title or pinned status."""
     store = request.app.state.chat_store
+    chat = next((c for c in store.list_chats() if c.id == conversation_id), None)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
     if body.title is not None:
         store.rename_chat(conversation_id, body.title)
     if body.pinned is not None:
         store.set_pinned(conversation_id, body.pinned)
-    
+    if body.language is not None:
+        store.set_language(conversation_id, body.language)
+
     chat = next((c for c in store.list_chats() if c.id == conversation_id), None)
-    if chat is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    return ConversationResponse(id=chat.id, title=chat.title, pinned=chat.pinned)
+    return ConversationResponse(
+        id=chat.id, title=chat.title, pinned=chat.pinned, language=chat.language,
+    )
 
 
 @app.delete("/conversations/{conversation_id}")

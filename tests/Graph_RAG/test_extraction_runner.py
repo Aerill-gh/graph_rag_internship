@@ -21,8 +21,8 @@ class ExtractionRunnerTests(unittest.TestCase):
         ]
         (self.chunks_dir / "b.json").write_text(json.dumps(chunks[:1]), encoding="utf-8")
         (self.chunks_dir / "a.json").write_text(json.dumps(chunks[1:]), encoding="utf-8")
-        self.extraction_patch = patch("scripts.extract_graph_entities.extract_chunk")
-        self.merge_patch = patch("scripts.extract_graph_entities.merge_duplicate_entities")
+        self.extraction_patch = patch("graphrag.extract_graph_entities.extract_chunk")
+        self.merge_patch = patch("graphrag.extract_graph_entities.merge_duplicate_entities")
         self.extract = self.extraction_patch.start()
         self.merge = self.merge_patch.start()
         self.addCleanup(self.extraction_patch.stop)

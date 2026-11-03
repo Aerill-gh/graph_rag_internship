@@ -6,6 +6,7 @@ from unittest.mock import patch
 from chatbot.agent import (
     MAX_HISTORY_MESSAGES, AgentAnswer, BaselineAgent, GraphRAGAgent, NOT_FOUND,
 )
+from chatbot.languages import NOT_FOUND_RESPONSES
 from graphrag.config import FoundrySettings
 
 
@@ -111,6 +112,20 @@ class BaselineAgentTests(unittest.TestCase):
         result = self.agent.ask("Unknown topic")
         self.assertEqual(result.answer, NOT_FOUND)
         self.assertEqual(result.sources, [])
+
+    def test_selected_language_updates_instructions_and_not_found_response(self):
+        self.search.return_value = []
+        self.client.responses.create.return_value = make_response(calls=[make_search_call()])
+
+        result = self.agent.ask("Welche Leistungen?", language="de")
+
+        self.assertEqual(result.answer, NOT_FOUND_RESPONSES["de"])
+        instructions = self.project.agents.create_version.call_args.kwargs[
+            "definition"
+        ].instructions
+        self.assertIn("Respond in German", instructions)
+        self.assertIn(NOT_FOUND_RESPONSES["de"], instructions)
+        self.assertNotIn(NOT_FOUND, instructions)
 
     def test_invalid_or_unknown_citations_are_rejected(self):
         for answer in ("Answer without a source.", "Answer [S9]."):

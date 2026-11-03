@@ -11,6 +11,13 @@ from azure.ai.projects.models import FunctionTool, PromptAgentDefinition
 from azure.identity import DefaultAzureCredential
 
 from graphrag.config import FoundrySettings, settings
+from chatbot.languages import (
+    DEFAULT_LANGUAGE,
+    LANGUAGE_INSTRUCTION_NAMES,
+    LANGUAGE_NAMES,
+    NOT_FOUND_RESPONSES,
+    Language,
+)
 from chatbot.tools import (
     SEARCH_DOCUMENTS_DESCRIPTION, search_documents,
     EXPLORE_ENTITY_DESCRIPTION, QUERY_GRAPH_DESCRIPTION,
@@ -134,11 +141,14 @@ class BaselineAgent:
 
     def ask(
         self, question: str, history: Sequence[HistoryMessage] | None = None,
+        language: Language = DEFAULT_LANGUAGE,
     ) -> AgentAnswer:
         """Answer one question. Optional history gives follow-up questions their context;
         evidence still comes only from tool calls made during this turn."""
         if not isinstance(question, str) or not question.strip():
             raise ValueError("Question must be a nonempty string.")
+        if language not in LANGUAGE_NAMES:
+            raise ValueError("Unsupported response language.")
         # Validate before creating any Foundry resources, so bad input costs nothing.
         first_input = question if not history else history_input(question, history)
 
@@ -155,7 +165,7 @@ class BaselineAgent:
                 agent_name=f"zava-{self.mode}-{uuid4().hex[:12]}",
                 definition=PromptAgentDefinition(
                     model=self.configuration.chat_deployment,
-                    instructions=self.instructions,
+                    instructions=self.instructions_for_language(language),
                     tools=self.tool_definitions(),
                 ),
             )
@@ -198,7 +208,7 @@ class BaselineAgent:
                     if tool_calls == 0:
                         raise RuntimeError("The baseline agent did not search the documents.")
                     answer = response.output_text.strip()
-                    if answer == NOT_FOUND:
+                    if answer == NOT_FOUND_RESPONSES[language]:
                         return AgentAnswer(answer, [], tool_calls, tools_used, tool_trace)
                     citations = set(re.findall(r"\[S[0-9]+\]", answer))
                     known_citations = {f"[{source['citation_id']}]" for source in sources}
@@ -249,7 +259,9 @@ class BaselineAgent:
                     })
 
                 if not sources and (self.mode == "baseline" or tool_calls == self.max_tool_calls):
-                    return AgentAnswer(NOT_FOUND, [], tool_calls, tools_used, tool_trace)
+                    return AgentAnswer(
+                        NOT_FOUND_RESPONSES[language], [], tool_calls, tools_used, tool_trace,
+                    )
                 response = client.responses.create(
                     input=outputs,
                     conversation=conversation.id,
@@ -258,6 +270,15 @@ class BaselineAgent:
                     parallel_tool_calls=False,
                     max_output_tokens=1500,
                 )
+
+    def instructions_for_language(self, language: Language) -> str:
+        instructions = self.instructions.replace(NOT_FOUND, NOT_FOUND_RESPONSES[language])
+        if language == DEFAULT_LANGUAGE:
+            return instructions
+        return (
+            f"{instructions}\n\nRespond in {LANGUAGE_INSTRUCTION_NAMES[language]}. "
+            "Keep citation IDs such as [S1] unchanged."
+        )
 
 
 class GraphRAGAgent(BaselineAgent):

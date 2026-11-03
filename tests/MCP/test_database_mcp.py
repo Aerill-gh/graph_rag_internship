@@ -20,10 +20,18 @@ from database_mcp.contracts import (
     ChunkReadResponse,
     ChunkWrite,
     ChunkWriteResponse,
+    CorpusSummaryResponse,
+    EntityCandidate,
+    ExploreEntityResponse,
     ExtractionWrite,
     ExtractionWriteResponse,
+    FindEntitiesResponse,
+    GraphFact,
     HealthResponse,
+    QueryGraphResponse,
     SchemaResponse,
+    SearchDocumentsResponse,
+    SearchPassage,
 )
 from database_mcp.server import DatabaseBackend, create_mcp_server
 
@@ -56,6 +64,27 @@ def backend_mock() -> Mock:
         embedding=[0.1] * EMBEDDING_DIMENSIONS, embedding_model="test-embedding",
         entities=EXTRACTION["entities"], relationships=EXTRACTION["relationships"],
         entities_truncated=False, relationships_truncated=False,
+    )
+    backend.search_documents.return_value = SearchDocumentsResponse(passages=[SearchPassage(
+        chunk_id=CHUNK["chunk_id"], source_document=CHUNK["source_document"],
+        pages=CHUNK["pages"], text=CHUNK["text"], score=0.9,
+    )])
+    backend.find_entities.return_value = FindEntitiesResponse(candidates=[
+        EntityCandidate(labels=["Plan"], name="Plus"),
+    ])
+    fact = GraphFact(
+        source="Plus", relationship="COVERS", target="Gym",
+        chunk_id=CHUNK["chunk_id"], document=CHUNK["source_document"],
+        pages=CHUNK["pages"], text=CHUNK["text"],
+        source_labels=["Plan"], target_labels=["Service"],
+    )
+    backend.explore_entity.return_value = ExploreEntityResponse(facts=[fact], truncated=False)
+    backend.query_graph.return_value = QueryGraphResponse(
+        facts=[fact], cypher="MATCH ... LIMIT $limit", parameters={"limit": 21},
+        result_limit=20, truncated=False, scope="Extracted graph facts only.",
+    )
+    backend.corpus_summary.return_value = CorpusSummaryResponse(
+        database="test", chunks=1, nodes=2, relationships=1, sha256="a" * 64,
     )
     return backend
 
@@ -105,9 +134,14 @@ class McpServerTests(unittest.IsolatedAsyncioTestCase):
             tools = {tool.name: tool for tool in (await session.list_tools()).tools}
             self.assertEqual(set(tools), {
                 "health_check", "ensure_schema", "upsert_chunk",
-                "upsert_extraction", "get_chunk",
+                "upsert_extraction", "get_chunk", "search_documents",
+                "find_entities", "explore_entity", "query_graph", "corpus_summary",
             })
-            self.assertTrue(tools["get_chunk"].annotations.readOnlyHint)
+            for name in (
+                "get_chunk", "search_documents", "find_entities", "explore_entity", "query_graph",
+                "corpus_summary",
+            ):
+                self.assertTrue(tools[name].annotations.readOnlyHint)
             self.assertFalse(tools["upsert_extraction"].annotations.readOnlyHint)
             chunk_request = ChunkWrite.model_validate({"chunk": CHUNK})
             extraction_request = ExtractionWrite.model_validate({
@@ -118,11 +152,24 @@ class McpServerTests(unittest.IsolatedAsyncioTestCase):
                 ("upsert_chunk", {"request": chunk_request.model_dump()}),
                 ("upsert_extraction", {"request": extraction_request.model_dump()}),
                 ("get_chunk", {"chunk_id": CHUNK["chunk_id"]}),
+                ("search_documents", {"embedding": [0.1] * EMBEDDING_DIMENSIONS, "top_k": 5}),
+                ("find_entities", {"name": "Plus", "limit": 10}),
+                ("explore_entity", {"name": "Plus", "label": "Plan", "limit": 20}),
+                ("query_graph", {
+                    "pattern": "Plan|COVERS|Service", "source_names": ["Plus"],
+                    "target_name": "", "match_mode": "any", "limit": 20,
+                }),
+                ("corpus_summary", {}),
             ):
                 result = await session.call_tool(name, arguments)
                 self.assertFalse(result.isError, name)
             self.backend.upsert_chunk.assert_called_once_with(chunk_request)
             self.backend.upsert_extraction.assert_called_once_with(extraction_request)
+            self.backend.search_documents.assert_called_once()
+            self.backend.find_entities.assert_called_once()
+            self.backend.explore_entity.assert_called_once()
+            self.backend.query_graph.assert_called_once()
+            self.backend.corpus_summary.assert_called_once()
 
     async def test_server_rejects_invalid_write_before_backend_call(self):
         async with create_connected_server_and_client_session(self.server) as session:
@@ -135,11 +182,18 @@ class McpServerTests(unittest.IsolatedAsyncioTestCase):
                     "chunk_id": CHUNK["chunk_id"],
                     "extraction": {"entities": [], "relationships": EXTRACTION["relationships"]},
                 }}),
+                ("search_documents", {"embedding": [0.1], "top_k": 5}),
+                ("query_graph", {
+                    "pattern": "Plan) DELETE n //|COVERS|Service",
+                    "source_names": ["Plus"], "target_name": "", "match_mode": "any", "limit": 20,
+                }),
             ):
                 result = await session.call_tool(name, arguments)
                 self.assertTrue(result.isError, name)
         self.backend.upsert_chunk.assert_not_called()
         self.backend.upsert_extraction.assert_not_called()
+        self.backend.search_documents.assert_not_called()
+        self.backend.query_graph.assert_not_called()
 
     async def test_missing_source_and_backend_failures_are_errors(self):
         self.backend.upsert_extraction.side_effect = ValueError("Source chunk missing")
@@ -175,6 +229,19 @@ class McpServerTests(unittest.IsolatedAsyncioTestCase):
                     )
                     client.store_extraction(CHUNK["chunk_id"], EXTRACTION)
                 self.assertEqual(client.get_chunk(CHUNK["chunk_id"]).chunk.text, CHUNK["text"])
+                self.assertEqual(
+                    client.search_documents([0.1] * EMBEDDING_DIMENSIONS).passages[0].text,
+                    CHUNK["text"],
+                )
+                self.assertEqual(client.find_entities("Plus").candidates[0].name, "Plus")
+                self.assertEqual(
+                    client.explore_entity("Plus", "Plan").facts[0].target, "Gym",
+                )
+                self.assertEqual(
+                    client.query_graph("Plan|COVERS|Service", ["Plus"]).facts[0].target,
+                    "Gym",
+                )
+                self.assertEqual(client.corpus_summary().sha256, "a" * 64)
                 self.backend.upsert_chunk.side_effect = RuntimeError("Write unavailable")
                 with self.assertRaisesRegex(RuntimeError, "upsert_chunk"):
                     client.store_chunk(CHUNK)
@@ -248,6 +315,41 @@ class IngestionBoundaryTests(unittest.TestCase):
                 for forbidden in (
                     "settings.neo4j", "create_neo4j_driver", "GraphDatabase",
                     "NEO4J_PASSWORD", "NEO4J_URI", "NEO4J_USERNAME",
+                ):
+                    self.assertNotIn(forbidden, source)
+
+
+class ServiceAccessBoundaryTests(unittest.TestCase):
+    def test_chatbot_graphrag_evaluation_and_client_use_only_database_mcp(self):
+        root = Path(__file__).resolve().parents[2]
+        files = (
+            root / "src" / "chatbot" / "agent.py",
+            root / "src" / "chatbot" / "chat_bot_main.py",
+            root / "src" / "chatbot" / "tools.py",
+            root / "src" / "chatbot" / "mcp_server.py",
+            root / "src" / "database_mcp" / "client.py",
+            root / "src" / "graphrag" / "tools.py",
+            root / "src" / "graphrag" / "graph_tools.py",
+            root / "src" / "graphrag" / "config.py",
+            root / "evaluation" / "run_eval.py",
+        )
+        for path in files:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+            with self.subTest(path=path):
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ImportFrom):
+                        self.assertNotIn(node.module, {
+                            "neo4j", "Neo4j.neo4j_store", "database_mcp.neo4j_backend",
+                        })
+                    elif isinstance(node, ast.Import):
+                        self.assertFalse(any(
+                            alias.name == "neo4j" or alias.name.startswith("Neo4j.")
+                            for alias in node.names
+                        ))
+                for forbidden in (
+                    "create_neo4j_driver", "GraphDatabase", "NEO4J_PASSWORD",
+                    "NEO4J_URI", "NEO4J_USERNAME", "Neo4jSettings",
                 ):
                     self.assertNotIn(forbidden, source)
 

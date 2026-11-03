@@ -6,6 +6,8 @@ from time import time_ns
 from typing import Iterator, Literal, NotRequired, TypedDict
 from uuid import uuid4
 
+from chatbot.languages import LANGUAGE_NAMES, Language
+
 
 DEFAULT_CHAT_PATH = Path(__file__).resolve().parents[2] / "data" / "chats" / "history.sqlite3"
 MAX_PINNED_CHATS = 3
@@ -25,6 +27,7 @@ class SavedChat:
     id: str
     title: str
     pinned: bool
+    language: Language
 
 
 def automatic_title(question: str) -> str:
@@ -47,7 +50,9 @@ class ChatStore:
                     title TEXT NOT NULL,
                     auto_title INTEGER NOT NULL DEFAULT 1,
                     pinned INTEGER NOT NULL DEFAULT 0,
-                    updated_at INTEGER NOT NULL
+                    updated_at INTEGER NOT NULL,
+                    language TEXT NOT NULL DEFAULT 'en'
+                        CHECK (language IN ('en', 'de', 'lv', 'es'))
                 );
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY,
@@ -56,6 +61,12 @@ class ChatStore:
                     content TEXT NOT NULL
                 );
             """)
+            chat_columns = {row[1] for row in db.execute("PRAGMA table_info(chats)")}
+            if "language" not in chat_columns:
+                db.execute(
+                    "ALTER TABLE chats ADD COLUMN language TEXT NOT NULL DEFAULT 'en' "
+                    "CHECK (language IN ('en', 'de', 'lv', 'es'))"
+                )
             # Migration: databases created before the Baseline/GraphRAG switch lack this column.
             columns = {row[1] for row in db.execute("PRAGMA table_info(messages)")}
             if "mode" not in columns:
@@ -74,9 +85,10 @@ class ChatStore:
     def list_chats(self) -> list[SavedChat]:
         with self._connect() as db:
             rows = db.execute(
-                "SELECT id, title, pinned FROM chats ORDER BY pinned DESC, updated_at DESC, id"
+                "SELECT id, title, pinned, language FROM chats "
+                "ORDER BY pinned DESC, updated_at DESC, id"
             ).fetchall()
-        return [SavedChat(id, title, bool(pinned)) for id, title, pinned in rows]
+        return [SavedChat(id, title, bool(pinned), language) for id, title, pinned, language in rows]
 
     def create_chat(self) -> str:
         chat_id = str(uuid4())
@@ -86,6 +98,16 @@ class ChatStore:
                 (chat_id, "New chat", time_ns()),
             )
         return chat_id
+
+    def set_language(self, chat_id: str, language: Language) -> None:
+        if language not in LANGUAGE_NAMES:
+            raise ValueError("Unsupported chat language.")
+        with self._connect() as db:
+            cursor = db.execute(
+                "UPDATE chats SET language = ? WHERE id = ?", (language, chat_id)
+            )
+            if not cursor.rowcount:
+                raise ValueError("This chat no longer exists.")
 
     def rename_chat(self, chat_id: str, title: str) -> None:
         title = " ".join(title.split())

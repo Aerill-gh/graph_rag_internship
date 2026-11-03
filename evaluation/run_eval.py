@@ -11,12 +11,11 @@ from time import perf_counter
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
 
-from graphrag.chatbot.agent import (
+from chatbot.agent import (
     BaselineAgent, GraphRAGAgent, NOT_FOUND, BASELINE_INSTRUCTIONS, GRAPHRAG_INSTRUCTIONS,
 )
-from graphrag.chatbot.tools import search_documents
 from graphrag.config import PROJECT_ROOT, settings
-from graphrag.neo4j_store import create_neo4j_driver
+from database_mcp.client import DatabaseMcpClient
 
 
 JUDGE_INSTRUCTIONS = """
@@ -49,42 +48,32 @@ def load_questions(path: Path) -> list[dict]:
 
 
 def corpus_state() -> dict:
-    with create_neo4j_driver() as driver:
-        with driver.session(database=settings.neo4j.database) as session:
-            def read(transaction):
-                nodes = transaction.run(
-                    "MATCH (node) RETURN labels(node) AS labels, properties(node) AS properties"
-                ).data()
-                facts = transaction.run(
-                    "MATCH (source)-[fact]->(target) RETURN labels(source) AS source_labels, "
-                    "coalesce(source.chunk_id, source.name) AS source, type(fact) AS type, "
-                    "labels(target) AS target_labels, coalesce(target.chunk_id, target.name) AS target, "
-                    "properties(fact) AS properties"
-                ).data()
-                return nodes, facts
-            nodes, facts = session.execute_read(read)
-    chunks = [node["properties"] for node in nodes if "Chunk" in node["labels"]]
     local = {
         chunk["chunk_id"]: chunk for path in (PROJECT_ROOT / "data/chunks").glob("*_chunks.json")
         for chunk in json.loads(path.read_text(encoding="utf-8"))
     }
-    stored = {chunk["chunk_id"]: chunk for chunk in chunks}
-    if set(stored) != set(local) or any(
-        any(chunk.get(field) != local[chunk_id].get(field) for field in ("text", "source_document", "pages"))
-        or len(chunk.get("embedding", [])) != 1536
-        or chunk.get("embedding_model") != settings.azure_openai_embedding_deployment
-        for chunk_id, chunk in stored.items()
-    ):
-        raise ValueError("Neo4j chunks/vectors do not match the current local corpus. Build an isolated aligned database first.")
-    canonical = {
-        "nodes": sorted((json.dumps(node, sort_keys=True) for node in nodes)),
-        "relationships": sorted((json.dumps(fact, sort_keys=True) for fact in facts)),
-    }
-    return {
-        "database": settings.neo4j.database, "chunks": len(chunks),
-        "nodes": len(nodes), "relationships": len(facts),
-        "sha256": hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest(),
-    }
+    with DatabaseMcpClient() as client:
+        summary = client.corpus_summary()
+        if summary.chunks != len(local):
+            raise ValueError(
+                "Database MCP chunks do not match the current local corpus. "
+                "Build an isolated aligned database first."
+            )
+        for chunk_id, local_chunk in local.items():
+            stored = client.get_chunk(chunk_id)
+            chunk = stored.chunk
+            if (
+                any(getattr(chunk, field) != local_chunk.get(field) for field in (
+                    "text", "source_document", "pages",
+                ))
+                or len(stored.embedding or []) != 1536
+                or stored.embedding_model != settings.azure_openai_embedding_deployment
+            ):
+                raise ValueError(
+                    "Database MCP chunks/vectors do not match the current local corpus. "
+                    "Build an isolated aligned database first."
+                )
+    return summary.model_dump()
 
 
 def judge_answer(question: dict, result: dict, mode: str) -> dict:

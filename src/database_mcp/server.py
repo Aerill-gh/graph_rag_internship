@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Protocol
+from typing import Literal, Protocol
 
 from anyio import to_thread
 from mcp.server.fastmcp import FastMCP
@@ -12,10 +12,19 @@ from database_mcp.contracts import (
     ChunkReadResponse,
     ChunkWrite,
     ChunkWriteResponse,
+    CorpusSummaryResponse,
+    ExploreEntityRequest,
+    ExploreEntityResponse,
     ExtractionWrite,
     ExtractionWriteResponse,
+    FindEntitiesRequest,
+    FindEntitiesResponse,
     HealthResponse,
+    QueryGraphRequest,
+    QueryGraphResponse,
     SchemaResponse,
+    SearchDocumentsRequest,
+    SearchDocumentsResponse,
 )
 
 
@@ -27,6 +36,13 @@ class DatabaseBackend(Protocol):
     def upsert_chunk(self, request: ChunkWrite) -> ChunkWriteResponse: ...
     def upsert_extraction(self, request: ExtractionWrite) -> ExtractionWriteResponse: ...
     def get_chunk(self, chunk_id: str) -> ChunkReadResponse: ...
+    def search_documents(
+        self, request: SearchDocumentsRequest,
+    ) -> SearchDocumentsResponse: ...
+    def find_entities(self, request: FindEntitiesRequest) -> FindEntitiesResponse: ...
+    def explore_entity(self, request: ExploreEntityRequest) -> ExploreEntityResponse: ...
+    def query_graph(self, request: QueryGraphRequest) -> QueryGraphResponse: ...
+    def corpus_summary(self) -> CorpusSummaryResponse: ...
 
 
 def create_mcp_server(backend: DatabaseBackend | None = None) -> FastMCP:
@@ -98,6 +114,48 @@ def create_mcp_server(backend: DatabaseBackend | None = None) -> FastMCP:
         if not isinstance(chunk_id, str) or not chunk_id.strip():
             raise ValueError("Source chunk ID cannot be blank.")
         return await to_thread.run_sync(database().get_chunk, chunk_id)
+
+    @server.tool(annotations=read_annotations)
+    async def search_documents(
+        embedding: list[float], top_k: int = 5,
+    ) -> SearchDocumentsResponse:
+        """Search indexed document chunks using a 1536-dimensional query embedding."""
+        request = SearchDocumentsRequest(embedding=embedding, top_k=top_k)
+        return await to_thread.run_sync(database().search_documents, request)
+
+    @server.tool(annotations=read_annotations)
+    async def find_entities(name: str, limit: int = 10) -> FindEntitiesResponse:
+        """Find allowed ontology entities by a case-insensitive name substring."""
+        request = FindEntitiesRequest(name=name, limit=limit)
+        return await to_thread.run_sync(database().find_entities, request)
+
+    @server.tool(annotations=read_annotations)
+    async def explore_entity(
+        name: str, label: str, limit: int = 20,
+    ) -> ExploreEntityResponse:
+        """Read bounded, source-backed facts attached to one named graph entity."""
+        request = ExploreEntityRequest(name=name, label=label, limit=limit)
+        return await to_thread.run_sync(database().explore_entity, request)
+
+    @server.tool(annotations=read_annotations)
+    async def query_graph(
+        pattern: str,
+        source_names: list[str],
+        target_name: str = "",
+        match_mode: Literal["any", "all", "difference"] = "any",
+        limit: int = 20,
+    ) -> QueryGraphResponse:
+        """Query bounded graph facts using an allowlisted ontology pattern, never raw Cypher."""
+        request = QueryGraphRequest(
+            pattern=pattern, source_names=source_names, target_name=target_name,
+            match_mode=match_mode, limit=limit,
+        )
+        return await to_thread.run_sync(database().query_graph, request)
+
+    @server.tool(annotations=read_annotations)
+    async def corpus_summary() -> CorpusSummaryResponse:
+        """Return bounded corpus counts and a digest without exposing full graph contents."""
+        return await to_thread.run_sync(database().corpus_summary)
 
     return server
 
