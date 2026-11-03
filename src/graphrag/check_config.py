@@ -1,14 +1,15 @@
 import argparse
 
 from graphrag.config import settings
-from Neo4j.neo4j_store import create_neo4j_driver
+from database_mcp.client import DatabaseMcpClient
+from database_mcp.config import database_mcp_url
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Check service configuration without displaying secret values."
     )
-    parser.add_argument("--connect", action="store_true", help="Verify Neo4j connectivity.")
+    parser.add_argument("--connect", action="store_true", help="Verify database MCP connectivity.")
     args = parser.parse_args(argv)
 
     missing = False
@@ -16,7 +17,6 @@ def main(argv=None) -> int:
         ("Foundry", "foundry"),
         ("Azure OpenAI embeddings", "azure_openai"),
         ("Embedding deployment", "azure_openai_embedding_deployment"),
-        ("Neo4j", "neo4j"),
     ):
         try:
             getattr(settings, setting_name)
@@ -28,14 +28,24 @@ def main(argv=None) -> int:
     if missing:
         return 1
 
+    try:
+        database_mcp_url()
+    except ValueError as error:
+        print(f"Database MCP: {error}")
+        return 1
+    print("Database MCP: endpoint configured (value hidden).")
+
     if args.connect:
         try:
-            with create_neo4j_driver() as driver:
-                driver.verify_connectivity()
-        except Exception:
-            print("Neo4j connection failed; verify local credentials and that the database is running.")
+            with DatabaseMcpClient() as client:
+                client.health_check()
+        except Exception as error:
+            print(
+                f"Database MCP connection failed ({type(error).__name__}); "
+                "check the MCP endpoint, server configuration and database availability."
+            )
             return 1
-        print("Neo4j connection verified.")
+        print("Database MCP connection verified.")
     return 0
 
 

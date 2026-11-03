@@ -1,5 +1,6 @@
 # Secrets
 .env
+.env.database-mcp
 
 # Local project configuration
 src/graphrag/__init__.py

@@ -4,15 +4,14 @@ from functools import partial
 
 from azure.identity import DefaultAzureCredential
 
-from graphrag.config import settings
+from database_mcp.client import DatabaseMcpClient
 from graphrag.components import (
     AzureBlobDocumentLoader,
     ZavaDocumentParser,
     ZavaDocumentSplitter,
     ZavaChunkEmbedder,
-    Neo4jChunkLoader,
+    McpChunkLoader,
 )
-from Neo4j.neo4j_store import create_neo4j_driver, create_neo4j_schema
 from graphrag.pipeline import CompositeDocumentProcessingPipeline
 
 from graphrag.documents import (
@@ -36,29 +35,27 @@ def main() -> None:
     credential = DefaultAzureCredential()
 
     try:
-        with create_neo4j_driver() as driver:
-            driver.verify_connectivity()
+        with DatabaseMcpClient() as client:
+            client.health_check()
+            client.ensure_schema()
+            pipeline = CompositeDocumentProcessingPipeline(
+                document_loader=AzureBlobDocumentLoader(credential),
+                document_parser=ZavaDocumentParser(
+                    pdf_parser=partial(
+                        parse_pdf_document,
+                        credential=credential,
+                    )
+                ),
+                document_splitter=ZavaDocumentSplitter(
+                    pdf_splitter=create_chunks,
+                    markdown_splitter=create_markdown_chunks,
+                ),
+                chunk_embedder=ZavaChunkEmbedder(),
+                chunk_loader=McpChunkLoader(client),
+            )
 
-            with driver.session(database=settings.neo4j.database) as session:
-                create_neo4j_schema(session)
-                pipeline = CompositeDocumentProcessingPipeline(
-                    document_loader=AzureBlobDocumentLoader(credential),
-                    document_parser=ZavaDocumentParser(
-                        pdf_parser=partial(
-                            parse_pdf_document,
-                            credential=credential,
-                        )
-                    ),
-                    document_splitter=ZavaDocumentSplitter(
-                        pdf_splitter=create_chunks,
-                        markdown_splitter=create_markdown_chunks,
-                    ),
-                    chunk_embedder=ZavaChunkEmbedder(),
-                    chunk_loader=Neo4jChunkLoader(session),
-                )
-
-                pipeline.load_document(args.blob)
-                print(f"Successfully processed: {args.blob}")
+            pipeline.load_document(args.blob)
+            print(f"Successfully processed: {args.blob}")
 
     finally:
         credential.close()

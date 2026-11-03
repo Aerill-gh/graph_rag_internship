@@ -3,11 +3,9 @@ from pathlib import PurePosixPath
 
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobClient
-from neo4j import Session
-
+from database_mcp.client import DatabaseMcpClient
 from graphrag.config import settings
 from graphrag.embeddings import get_chunk_embedding
-from Neo4j.neo4j_store import store_chunk
 from graphrag.pipeline import (
     Chunk,
     ChunkEmbedder,
@@ -123,11 +121,11 @@ class ZavaChunkEmbedder(ChunkEmbedder):
         return get_chunk_embedding(chunk.to_record())
 
 
-class Neo4jChunkLoader(ChunkLoader):
-    """Store document chunks and embeddings in Neo4j."""
+class McpChunkLoader(ChunkLoader):
+    """Store document chunks and embeddings through the database MCP client."""
 
-    def __init__(self, session: Session) -> None:
-        self.session = session
+    def __init__(self, client: DatabaseMcpClient) -> None:
+        self.client = client
 
     def load_chunk(
         self,
@@ -135,4 +133,7 @@ class Neo4jChunkLoader(ChunkLoader):
     ) -> None:
         if chunk.embedding is None:
             raise ValueError("Cannot store a chunk before its embedding is set.")
-        store_chunk(self.session, chunk.to_record(), chunk.embedding)
+        self.client.store_chunk(
+            chunk.to_record(), chunk.embedding,
+            embedding_model=settings.azure_openai_embedding_deployment,
+        )

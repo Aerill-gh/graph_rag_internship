@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from graphrag.components import (
     ZavaChunkEmbedder,
-    Neo4jChunkLoader,
+    McpChunkLoader,
 )
 
 
@@ -133,23 +133,30 @@ class TestZavaChunkEmbedder(unittest.TestCase):
         self.assertEqual(result, expected_embedding)
 
 
-class TestNeo4jChunkLoader(unittest.TestCase):
+class TestMcpChunkLoader(unittest.TestCase):
 
-    @patch("graphrag.components.store_chunk")
-    def test_load_chunk(self, mock_store):
-        session = Mock()
+    @patch("graphrag.components.settings")
+    def test_load_chunk(self, configuration):
+        configuration.azure_openai_embedding_deployment = "test-embedding"
+        client = Mock()
         chunk = Chunk(chunk_id="test_001", text="Example chunk")
         embedding = [0.1, 0.2]
         chunk.set_embedding(embedding)
 
-        loader = Neo4jChunkLoader(session)
+        loader = McpChunkLoader(client)
         loader.load_chunk(chunk)
 
-        mock_store.assert_called_once_with(
-            session,
+        client.store_chunk.assert_called_once_with(
             chunk.to_record(),
             embedding,
+            embedding_model="test-embedding",
         )
+
+    def test_missing_embedding_is_rejected(self):
+        client = Mock()
+        with self.assertRaisesRegex(ValueError, "embedding"):
+            McpChunkLoader(client).load_chunk(Chunk(chunk_id="one", text="Text"))
+        client.store_chunk.assert_not_called()
 
 
 

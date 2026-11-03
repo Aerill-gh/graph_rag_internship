@@ -67,6 +67,19 @@ class Neo4jStoreTests(unittest.TestCase):
         self.assertEqual(json.loads(parameters["figures_json"]), chunk["figures"])
         self.assertEqual(parameters["embedding"], vector)
 
+    def test_mcp_write_uses_supplied_embedding_model(self):
+        chunk = {
+            "chunk_id": "one", "source_document": "source.pdf", "text": "Text",
+            "pages": [1], "token_count": 1,
+        }
+        store_chunk(
+            self.session, chunk, [0.1] * EMBEDDING_DIMENSIONS,
+            embedding_model="mcp-embedding",
+        )
+        self.assertEqual(
+            self.session.run.call_args.kwargs["embedding_model"], "mcp-embedding",
+        )
+
     def test_bad_chunk_or_vector_is_rejected_before_database_calls(self):
         chunk = {
             "chunk_id": "roles_001", "source_document": "role_library.pdf",

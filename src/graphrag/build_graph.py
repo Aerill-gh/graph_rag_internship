@@ -3,21 +3,16 @@ import json
 from pathlib import Path
 from typing import Callable
 
+from database_mcp.client import DatabaseMcpClient
 from graphrag.config import PROJECT_ROOT, settings
 from graphrag.graph_extraction import extract_chunk, merge_duplicate_entities
-from Neo4j.neo4j_store import (
-    create_neo4j_driver,
-    create_neo4j_schema,
-    store_chunk,
-    store_extraction,
-)
 from graphrag.embeddings import get_chunk_embedding
 
 
 DEFAULT_CHUNKS_DIR = PROJECT_ROOT / "data/chunks"
 
 
-def build_cached_graph(session, chunks: list[dict], report_path: Path) -> dict:
+def build_cached_graph(client: DatabaseMcpClient, chunks: list[dict], report_path: Path) -> dict:
     records = []
     missing = []
     for chunk in chunks:
@@ -27,9 +22,9 @@ def build_cached_graph(session, chunks: list[dict], report_path: Path) -> dict:
             missing.append(chunk["chunk_id"])
     merged = merge_duplicate_entities(records)
     for chunk in chunks:
-        store_chunk(session, chunk)
+        client.store_chunk(chunk)
     for record in merged:
-        store_extraction(session, record["chunk_id"], {
+        client.store_extraction(record["chunk_id"], {
             "entities": record["entities"], "relationships": record["relationships"],
         })
     report = {
@@ -69,7 +64,7 @@ def load_chunks(chunks_dir: Path, limit: int | None = None) -> list[dict]:
 
 
 def build_graph_for_chunks(
-    session,
+    client: DatabaseMcpClient,
     chunks: list[dict],
     embedding_fn: Callable[[dict], list[float]] = get_chunk_embedding,
     extraction_fn: Callable[[dict], dict] = extract_chunk,
@@ -79,13 +74,14 @@ def build_graph_for_chunks(
     for index, chunk in enumerate(chunks, start=1):
         print(f"Processing chunk {index}/{len(chunks)}: {chunk['chunk_id']}")
         vector = embedding_fn(chunk)
-        store_chunk(session, chunk, vector)
+        client.store_chunk(
+            chunk, vector, embedding_model=settings.azure_openai_embedding_deployment,
+        )
         extraction_records.append(extraction_fn(chunk))
 
     merged_records = merge_duplicate_entities(extraction_records)
     for record in merged_records:
-        store_extraction(
-            session,
+        client.store_extraction(
             record["chunk_id"],
             {"entities": record["entities"], "relationships": record["relationships"]},
         )
@@ -99,7 +95,7 @@ def build_graph_for_chunks(
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Build the Neo4j chunk vector index and ontology graph from chunk JSON files."
+        description="Build the chunk vector index and ontology graph through database MCP."
     )
     parser.add_argument("--chunks-dir", type=Path, default=DEFAULT_CHUNKS_DIR)
     parser.add_argument("--cache-only", action="store_true", help="Use cached facts only; never call Azure or generate embeddings.")
@@ -113,15 +109,14 @@ def main(argv=None) -> int:
         parser.error("--limit must be positive.")
     chunks = load_chunks(args.chunks_dir, args.limit)
 
-    with create_neo4j_driver() as driver:
-        driver.verify_connectivity()
-        with driver.session(database=settings.neo4j.database) as session:
-            create_neo4j_schema(session)
-            if args.cache_only:
-                counts = build_cached_graph(session, chunks, args.report)
-                print(f"Offline build: {counts['chunks']} source chunks; {counts['extracted_chunks']} cached extractions; {len(counts['missing_chunk_ids'])} missing. Report: {args.report}")
-                return 0
-            counts = build_graph_for_chunks(session, chunks)
+    with DatabaseMcpClient() as client:
+        client.health_check()
+        client.ensure_schema()
+        if args.cache_only:
+            counts = build_cached_graph(client, chunks, args.report)
+            print(f"Offline build: {counts['chunks']} source chunks; {counts['extracted_chunks']} cached extractions; {len(counts['missing_chunk_ids'])} missing. Report: {args.report}")
+            return 0
+        counts = build_graph_for_chunks(client, chunks)
 
     print(
         "Graph build complete: "

@@ -43,7 +43,10 @@ def create_neo4j_schema(session, dimensions: int = EMBEDDING_DIMENSIONS) -> None
     ).consume()
 
 
-def store_chunk(session, chunk: dict, embedding: list[float] | None = None) -> None:
+def store_chunk(
+    session, chunk: dict, embedding: list[float] | None = None,
+    *, embedding_model: str | None = None,
+) -> None:
     """Store a document chunk and its embedding in Neo4j."""
     if embedding is not None and len(embedding) != EMBEDDING_DIMENSIONS:
         raise ValueError(f"Embedding must have {EMBEDDING_DIMENSIONS} dimensions.")
@@ -71,7 +74,9 @@ def store_chunk(session, chunk: dict, embedding: list[float] | None = None) -> N
         token_count=chunk["token_count"],
         figures_json=json.dumps(chunk.get("figures", []), allow_nan=False),
         embedding=embedding,
-        embedding_model=settings.azure_openai_embedding_deployment if embedding is not None else None,
+        embedding_model=(
+            embedding_model or settings.azure_openai_embedding_deployment
+        ) if embedding is not None else None,
     ).consume()
 
 
