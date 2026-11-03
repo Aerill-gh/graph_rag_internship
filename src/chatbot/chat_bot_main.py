@@ -223,5 +223,14 @@ def delete_conversation(conversation_id: str, request: Request) -> dict:
     return {"status": "deleted"}
 
 
+@app.get("/languages")
+def get_languages() -> dict:
+    """Get available languages and their names."""
+    return {
+        "default": DEFAULT_LANGUAGE,
+        "languages": LANGUAGE_NAMES,
+    }
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000)

@@ -3,14 +3,18 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import streamlit as st
 from dotenv import load_dotenv
 
-from chatbot.languages import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language
 from ui.locales import error_text, text
+
+# Language type definition (same as chatbot but no import from chatbot)
+Language = Literal["en", "de", "lv", "es"]
+DEFAULT_LANGUAGE: Language = "en"
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -109,6 +113,20 @@ def _make_backend_request(
         raise ChatServiceError(
             "The chatbot service returned an invalid response. Please try again."
         ) from None
+
+
+def get_languages() -> dict[str, str]:
+    """Fetch available languages from the backend API."""
+    try:
+        result = _make_backend_request("GET", "/languages")
+        # Cache the result in streamlit session state
+        return result.get("languages", {DEFAULT_LANGUAGE: "English"})
+    except ChatServiceError:
+        logger.error("Failed to fetch languages from API; using default.")
+        return {DEFAULT_LANGUAGE: "English"}
+    except Exception as exc:
+        logger.error("Unexpected error fetching languages (%s).", type(exc).__name__)
+        return {DEFAULT_LANGUAGE: "English"}
 
 
 def list_conversations() -> list[Conversation]:
@@ -246,7 +264,9 @@ def chat_with_bot(
         raise ValueError("Question cannot be blank.")
     if mode not in AGENT_MODES:
         raise ValueError(f"Unknown agent mode: {mode}")
-    if language not in LANGUAGE_NAMES:
+    # Validate language against known defaults (since we can't always fetch from API)
+    valid_languages: set[Language] = {"en", "de", "lv", "es"}
+    if language not in valid_languages:
         raise ValueError(f"Unknown response language: {language}")
 
     body: dict[str, object] = {"message": question, "mode": mode, "language": language}
@@ -613,11 +633,13 @@ def _main() -> None:
             key="agent_mode",
             captions=[text("baseline_caption", language), text("graphrag_caption", language)],
         )
+        # Fetch available languages from the backend API
+        available_languages = get_languages()
         selected_language = st.selectbox(
             text("language", language),
-            options=list(LANGUAGE_NAMES),
-            format_func=lambda value: LANGUAGE_NAMES[value],
-            index=list(LANGUAGE_NAMES).index(language),
+            options=list(available_languages),
+            format_func=lambda value: available_languages[value],
+            index=list(available_languages).index(language) if language in available_languages else 0,
             key=f"language_{active_id}",
         )
         if selected_language != language:

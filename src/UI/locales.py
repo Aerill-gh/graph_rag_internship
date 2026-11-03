@@ -1,5 +1,7 @@
-from chatbot.languages import Language
+from typing import Literal
 
+# Language type definition - same as chatbot but no import
+Language = Literal["en", "de", "lv", "es"]
 
 TEXT: dict[Language, dict[str, str]] = {
     "en": {
