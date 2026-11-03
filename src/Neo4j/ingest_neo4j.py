@@ -3,16 +3,11 @@ import argparse
 import json
 from pathlib import Path
 
-from graphrag.config import settings
+from database_mcp.client import DatabaseMcpClient
+from graphrag.config import PROJECT_ROOT, settings
 from graphrag.embeddings import get_chunk_embedding
-from Neo4j.neo4j_store import (
-    create_neo4j_driver,
-    create_neo4j_schema,
-    store_chunk,
-)
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CHUNKS_DIR = PROJECT_ROOT / "data" / "chunks"
 
 
@@ -34,7 +29,7 @@ def load_chunks(chunks_dir: Path, limit: int | None = None) -> list[dict]:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Embed cached chunks and store them in Neo4j."
+        description="Embed cached chunks and store them through database MCP."
     )
     parser.add_argument("--limit", type=int, help="Maximum chunks to ingest (use 3 for a smoke test).")
     args = parser.parse_args(argv)
@@ -42,15 +37,15 @@ def main(argv=None):
         parser.error("--limit must be positive.")
     chunks = load_chunks(CHUNKS_DIR, args.limit)
 
-    with create_neo4j_driver() as driver:
-        driver.verify_connectivity()
-
-        with driver.session(database=settings.neo4j.database) as session:
-            create_neo4j_schema(session)
-            for index, chunk in enumerate(chunks, start=1):
-                embedding = get_chunk_embedding(chunk)
-                store_chunk(session, chunk, embedding)
-                print(f"[{index}/{len(chunks)}] Stored: {chunk['chunk_id']}")
+    with DatabaseMcpClient() as client:
+        client.health_check()
+        client.ensure_schema()
+        for index, chunk in enumerate(chunks, start=1):
+            embedding = get_chunk_embedding(chunk)
+            client.store_chunk(
+                chunk, embedding, embedding_model=settings.azure_openai_embedding_deployment,
+            )
+            print(f"[{index}/{len(chunks)}] Stored: {chunk['chunk_id']}")
 
     print(f"\nTotal chunks processed: {len(chunks)}")
 
