@@ -5,8 +5,8 @@ import json
 
 from neo4j import Driver, GraphDatabase, ManagedTransaction
 
-from database_mcp.config import DatabaseSettings
-from database_mcp.contracts import (
+from .config import DatabaseSettings
+from .contracts import (
     ChunkPayload,
     ChunkReadResponse,
     ChunkWrite,

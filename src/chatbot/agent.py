@@ -18,7 +18,7 @@ from chatbot.languages import (
     NOT_FOUND_RESPONSES,
     Language,
 )
-from chatbot.tools import (
+from graphrag.tools import (
     SEARCH_DOCUMENTS_DESCRIPTION, search_documents,
     EXPLORE_ENTITY_DESCRIPTION, QUERY_GRAPH_DESCRIPTION,
     graph_tool_parameters, run_graph_tool,

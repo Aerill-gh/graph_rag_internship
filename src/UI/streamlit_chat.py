@@ -10,7 +10,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from chatbot.languages import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language
-from UI.locales import error_text, text
+from ui.locales import error_text, text
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

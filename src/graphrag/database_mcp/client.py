@@ -13,8 +13,8 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel
 
-from database_mcp.config import database_mcp_url
-from database_mcp.contracts import (
+from .config import database_mcp_url
+from .contracts import (
     ChunkReadResponse,
     ChunkWrite,
     ChunkWriteResponse,
