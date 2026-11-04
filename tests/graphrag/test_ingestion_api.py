@@ -48,7 +48,7 @@ class IngestionApiTests(unittest.TestCase):
 
     def test_database_backend_imports_real_storage_helpers(self):
         from graphrag.database_mcp import neo4j_backend
-        from graphrag.neo4j import neo4j_store
+        from graphrag.Neo4j import neo4j_store
 
         self.assertIs(neo4j_backend.create_neo4j_schema, neo4j_store.create_neo4j_schema)
         self.assertIs(neo4j_backend.store_chunk, neo4j_store.store_chunk)

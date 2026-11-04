@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
-from chatbot import chat_bot_main
+from chatbot import main
 from chatbot.agent import AgentAnswer
 from chatbot.chat_store import ChatStore
 from graphrag.database_mcp.client import DatabaseMcpError
@@ -28,12 +28,12 @@ class TestChatApi(unittest.TestCase):
         self.graphrag.ask.return_value = AgentAnswer(
             "Graph answer [S1].", [SOURCE], 2, ["explore_entity", "search_documents"],
         )
-        self.enterContext(patch.object(chat_bot_main, "BaselineAgent", return_value=self.baseline))
-        self.enterContext(patch.object(chat_bot_main, "GraphRAGAgent", return_value=self.graphrag))
+        self.enterContext(patch.object(main, "BaselineAgent", return_value=self.baseline))
+        self.enterContext(patch.object(main, "GraphRAGAgent", return_value=self.graphrag))
         self.temp_directory = self.enterContext(tempfile.TemporaryDirectory())
         self.test_store = ChatStore(Path(self.temp_directory) / "chats.sqlite3")
-        self.enterContext(patch.object(chat_bot_main, "ChatStore", return_value=self.test_store))
-        self.client = self.enterContext(TestClient(chat_bot_main.app))
+        self.enterContext(patch.object(main, "ChatStore", return_value=self.test_store))
+        self.client = self.enterContext(TestClient(main.app))
 
     def test_default_mode_is_baseline_and_returns_structured_sources(self):
         response = self.client.post("/chat", json={"message": "Who needs Python?"})
