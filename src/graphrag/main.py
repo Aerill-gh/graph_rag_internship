@@ -8,7 +8,7 @@ from anyio import to_thread
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-from .contracts import (
+from .database_mcp.contracts import (
     ChunkReadResponse,
     ChunkWrite,
     ChunkWriteResponse,

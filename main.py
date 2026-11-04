@@ -81,13 +81,13 @@ def run_service(service: Service) -> None:
     import uvicorn
 
     if service.name == "mcp":
-        from graphrag.database_mcp.server import create_mcp_server
+        from graphrag.main import create_mcp_server
 
         app = create_mcp_server().streamable_http_app()
     elif service.name == "graphrag":
         from graphrag.ingestion_api import app
     else:
-        from chatbot.chat_bot_main import app
+        from chatbot.main import app
     uvicorn.run(app, host="127.0.0.1", port=service.port, log_config=None)
 
 
