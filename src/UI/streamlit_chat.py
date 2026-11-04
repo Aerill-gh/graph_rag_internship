@@ -10,7 +10,11 @@ from urllib.request import Request, urlopen
 import streamlit as st
 from dotenv import load_dotenv
 
-from ui.locales import error_text, text
+# Handle imports both from src/ and root directory
+try:
+    from ui.locales import error_text, text
+except ModuleNotFoundError:
+    from locales import error_text, text
 
 # Language type definition (same as chatbot but no import from chatbot)
 Language = Literal["en", "de", "lv", "es"]

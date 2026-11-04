@@ -32,7 +32,7 @@ from .contracts import (
     SearchDocumentsResponse,
     SearchPassage,
 )
-from Neo4j.neo4j_store import create_neo4j_schema, store_chunk, store_extraction
+from graphrag.Neo4j.neo4j_store import create_neo4j_schema, store_chunk, store_extraction
 
 
 class Neo4jBackend:

@@ -1,4 +1,4 @@
-"""Load the MCP server's database configuration without exporting it to clients."""
+﻿"""Load the MCP server's database configuration without exporting it to clients."""
 
 import os
 from dataclasses import dataclass, field
@@ -7,7 +7,7 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 @dataclass(frozen=True)
@@ -45,3 +45,4 @@ def database_mcp_url() -> str:
     if not url.startswith(("http://", "https://")):
         raise ValueError("DATABASE_MCP_URL must be an HTTP or HTTPS MCP endpoint.")
     return url
+
