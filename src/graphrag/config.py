@@ -9,6 +9,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(PROJECT_ROOT / ".env")
 
 
+def get_rest_api_port() -> int:
+    try:
+        port = int(os.getenv("GRAPHRAG_PORT", "").strip() or "8001")
+    except ValueError:
+        raise ValueError("GRAPHRAG_PORT must be an integer port.") from None
+    if not 1 <= port <= 65535:
+        raise ValueError("GRAPHRAG_PORT must be between 1 and 65535.")
+    return port
+
+
 def _required_env(name: str) -> str:
     value = os.getenv(name)
     if not value:

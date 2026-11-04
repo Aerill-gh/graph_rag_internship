@@ -25,7 +25,34 @@ class FoundrySettings:
 
 def _load_env() -> None:
     """Load environment variables from .env file."""
-    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+
+
+def _port(name: str, default: int) -> int:
+    _load_env()
+    try:
+        port = int(os.getenv(name, "").strip() or str(default))
+    except ValueError:
+        raise ValueError(f"{name} must be an integer port.") from None
+    if not 1 <= port <= 65535:
+        raise ValueError(f"{name} must be between 1 and 65535.")
+    return port
+
+
+def get_rest_api_port() -> int:
+    return _port("CHATBOT_PORT", 8000)
+
+
+def get_ui_port() -> int:
+    return _port("UI_PORT", 8501)
+
+
+def get_api_urls() -> tuple[str, str]:
+    base_url = f"http://127.0.0.1:{get_rest_api_port()}"
+    return (
+        os.getenv("CHATBOT_API_URL", "").strip() or f"{base_url}/chat",
+        os.getenv("BACKEND_API_URL", "").strip() or base_url,
+    )
 
 
 def _required(name: str) -> str:
