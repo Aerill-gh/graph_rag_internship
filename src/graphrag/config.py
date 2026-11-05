@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DOCUMENT_DIR = PROJECT_ROOT / "document_storage"
 load_dotenv(PROJECT_ROOT / ".env")
 
 
@@ -57,21 +58,6 @@ class Settings:
         default_factory=lambda: os.getenv("DOCINTEL_ENDPOINT")
         or "https://graphrag.cognitiveservices.azure.com/"
     )
-    storage_account_name: str = field(
-        default_factory=lambda: os.getenv("STORAGE_ACCOUNT_NAME")
-        or "aidepartmentstorage"
-    )
-    blob_container: str = field(
-        default_factory=lambda: os.getenv("BLOB_CONTAINER") or "docs"
-    )
-    blob_name: str = field(
-        default_factory=lambda: os.getenv("BLOB_NAME") or "role_library.pdf"
-    )
-
-    @property
-    def storage_account_url(self) -> str:
-        return f"https://{self.storage_account_name}.blob.core.windows.net"
-
     @property
     def foundry(self) -> FoundrySettings:
         return FoundrySettings(

@@ -1,10 +1,8 @@
 from collections.abc import Callable
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
-from azure.identity import DefaultAzureCredential
-from azure.storage.blob import BlobClient
 from graphrag.database_mcp.client import DatabaseMcpClient
-from graphrag.config import settings
+from graphrag.config import DOCUMENT_DIR, settings
 from graphrag.embeddings import get_chunk_embedding
 from graphrag.pipeline import (
     Chunk,
@@ -18,28 +16,30 @@ from graphrag.pipeline import (
 )
 
 
-class AzureBlobDocumentLoader(DocumentLoader):
-    """Load documents from Azure Blob Storage."""
+class LocalDocumentLoader(DocumentLoader):
+    """Load documents relative to local document storage."""
 
-    def __init__(self, credential: DefaultAzureCredential) -> None:
-        self.credential = credential
+    def __init__(self, document_dir: Path = DOCUMENT_DIR) -> None:
+        self.document_dir = document_dir.resolve()
 
     def load(self, source: str | DocumentSource) -> bytes:
         if isinstance(source, DocumentSource):
             if source.content is not None:
                 return source.content
-            blob_name = source.location
-            if not isinstance(blob_name, str) or not blob_name:
-                raise ValueError("Azure Blob source requires a string location.")
+            location = source.location
         else:
-            blob_name = source
-        with BlobClient(
-            account_url=settings.storage_account_url,
-            container_name=settings.blob_container,
-            blob_name=blob_name,
-            credential=self.credential,
-        ) as blob_client:
-            return blob_client.download_blob().readall()
+            location = source
+        if not isinstance(location, (str, Path)) or not str(location).strip():
+            raise ValueError("Local document source requires a relative file path.")
+        relative_path = Path(location)
+        document_path = (self.document_dir / relative_path).resolve()
+        if (
+            relative_path.is_absolute()
+            or ".." in relative_path.parts
+            or not document_path.is_relative_to(self.document_dir)
+        ):
+            raise ValueError("The document must be inside local document storage.")
+        return document_path.read_bytes()
 
 
 

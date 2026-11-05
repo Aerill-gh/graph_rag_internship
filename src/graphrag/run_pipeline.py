@@ -1,18 +1,19 @@
 
 import argparse
 from functools import partial
+from pathlib import PurePosixPath
 
 from azure.identity import DefaultAzureCredential
 
 from graphrag.database_mcp.client import DatabaseMcpClient
 from graphrag.components import (
-    AzureBlobDocumentLoader,
+    LocalDocumentLoader,
     ZavaDocumentParser,
     ZavaDocumentSplitter,
     ZavaChunkEmbedder,
     McpChunkLoader,
 )
-from graphrag.pipeline import CompositeDocumentProcessingPipeline
+from graphrag.pipeline import CompositeDocumentProcessingPipeline, DocumentSource
 
 from graphrag.documents import (
     parse_pdf_document,
@@ -26,9 +27,9 @@ def main() -> None:
         description="Run the modular Zava document ingestion pipeline."
     )
     parser.add_argument(
-        "--blob",
+        "--document",
         required=True,
-        help="Name of the document in Azure Blob Storage.",
+        help="Path relative to local document_storage.",
     )
     args = parser.parse_args()
 
@@ -39,7 +40,7 @@ def main() -> None:
             client.health_check()
             client.ensure_schema()
             pipeline = CompositeDocumentProcessingPipeline(
-                document_loader=AzureBlobDocumentLoader(credential),
+                document_loader=LocalDocumentLoader(),
                 document_parser=ZavaDocumentParser(
                     pdf_parser=partial(
                         parse_pdf_document,
@@ -54,8 +55,11 @@ def main() -> None:
                 chunk_loader=McpChunkLoader(client),
             )
 
-            pipeline.load_document(args.blob)
-            print(f"Successfully processed: {args.blob}")
+            source_document = PurePosixPath(args.document.replace("\\", "/")).as_posix()
+            pipeline.load_document(DocumentSource(
+                name=source_document, location=args.document,
+            ))
+            print(f"Successfully processed: {source_document}")
 
     finally:
         credential.close()

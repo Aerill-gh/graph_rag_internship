@@ -97,17 +97,17 @@ def analyze_batch(client, reader, pdf_hash, start, end):
     return cached
  
  
-def chunk_prefix_for_blob(blob_name):
-    blob_path = PurePosixPath(blob_name.replace("\\", "/").strip("/"))
-    return "_".join(blob_path.with_suffix("").parts)
+def chunk_prefix_for_document(source_document):
+    document_path = PurePosixPath(source_document.replace("\\", "/").strip("/"))
+    return "_".join(document_path.with_suffix("").parts)
  
  
-def output_path_for_blob(blob_name):
-    blob_path = PurePosixPath(blob_name.replace("\\", "/").strip("/"))
-    if not blob_path.name or any(part == ".." for part in blob_path.parts):
-        raise ValueError(f"Invalid Blob name: {blob_name}")
+def output_path_for_document(source_document):
+    document_path = PurePosixPath(source_document.replace("\\", "/").strip("/"))
+    if not document_path.name or any(part == ".." for part in document_path.parts):
+        raise ValueError(f"Invalid document name: {source_document}")
  
-    output_path = blob_path.with_name(f"{blob_path.stem}_chunks.json")
+    output_path = document_path.with_name(f"{document_path.stem}_chunks.json")
     return OUTPUT_DIR.joinpath(*output_path.parts)
  
  
@@ -136,7 +136,7 @@ def create_chunks(pages, figures, source_document):
         raise RuntimeError("The document contains no chunkable text.")
  
     chunks = []
-    chunk_prefix = chunk_prefix_for_blob(source_document)
+    chunk_prefix = chunk_prefix_for_document(source_document)
     step = MAX_TOKENS - OVERLAP_TOKENS
     for start in range(0, len(page_tokens), step):
         chunk_data = page_tokens[start:start + MAX_TOKENS]
@@ -193,24 +193,23 @@ def parse_pdf_document(pdf_bytes, credential):
             client.close()
  
  
-def create_pdf_chunks(pdf_bytes, blob_name, credential):
+def create_pdf_chunks(pdf_bytes, source_document, credential):
     parsed = parse_pdf_document(pdf_bytes, credential)
-    chunks = create_chunks(parsed["pages"], parsed["figures"], blob_name)
+    chunks = create_chunks(parsed["pages"], parsed["figures"], source_document)
     return chunks, len(parsed["figures"])
 
 
-def create_markdown_chunks(markdown_bytes, blob_name):
+def create_markdown_chunks(markdown_bytes, source_document):
     text = markdown_bytes.decode("utf-8-sig").strip()
     sections = re.split(r"(?m)(?=^#{1,6}\s)", text)
     chunks = []
-    prefix = chunk_prefix_for_blob(blob_name)
+    prefix = chunk_prefix_for_document(source_document)
     for section in sections:
         section = section.strip()
         if not section:
             continue
-        section_chunks = create_chunks([{"page": None, "text": section}], [], blob_name)
+        section_chunks = create_chunks([{"page": None, "text": section}], [], source_document)
         for chunk in section_chunks:
             chunk["chunk_id"] = f"{prefix}_{len(chunks) + 1:03d}"
             chunks.append(chunk)
     return chunks
-

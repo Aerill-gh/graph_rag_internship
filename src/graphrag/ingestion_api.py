@@ -14,7 +14,7 @@ from pypdf.errors import PdfReadError
 
 from graphrag.build_graph import build_graph_for_chunks
 from graphrag.components import ZavaDocumentParser, ZavaDocumentSplitter
-from graphrag.config import PROJECT_ROOT
+from graphrag.config import DOCUMENT_DIR
 from graphrag.database_mcp.client import DatabaseMcpClient, DatabaseMcpError
 from graphrag.documents import (
     create_chunks,
@@ -24,7 +24,6 @@ from graphrag.documents import (
 
 
 logger = logging.getLogger(__name__)
-DOCUMENT_DIR = PROJECT_ROOT / "document_storage"
 ingestion_lock = Lock()
 
 DocumentName = Literal[
