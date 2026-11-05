@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import graphrag.graph_tools as graph_tools
 import graphrag.tools as document_tools
-from database_mcp.contracts import (
+from graphrag.database_mcp.contracts import (
     EntityCandidate,
     ExploreEntityResponse,
     FindEntitiesResponse,
@@ -89,9 +89,9 @@ class GraphToolsTests(unittest.TestCase):
 
             results = search_documents("What does PerksPlus cover?")
 
-        self.assertEqual(results[0]["document"], "PerksPlus.pdf")
+        self.assertEqual(results[0]["source_document"], "PerksPlus.pdf")
         self.assertEqual(results[0]["chunk_id"], "chunk-1")
-        client.search_documents.assert_called_once_with([0.1] * 1536, 3)
+        client.search_documents.assert_called_once_with([0.1] * 1536, 5)
 
     def test_entity_helpers_map_mcp_responses(self):
         with patch("graphrag.graph_tools.DatabaseMcpClient") as factory:

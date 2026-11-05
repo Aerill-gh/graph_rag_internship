@@ -5,7 +5,7 @@ import os
 import unittest
 from pathlib import Path
 
-from database_mcp.client import DatabaseMcpClient
+from graphrag.database_mcp.client import DatabaseMcpClient
 from graphrag.graph_extraction import extract_chunk, merge_duplicate_entities
 
 

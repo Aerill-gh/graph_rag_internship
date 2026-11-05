@@ -106,14 +106,14 @@ class TestChatApi(unittest.TestCase):
 
     def test_invalid_answer_returns_readable_502(self):
         self.graphrag.ask.side_effect = ValueError("Answer has missing or unknown source citations.")
-        with self.assertLogs("chatbot.chat_bot_main", level="ERROR"):
+        with self.assertLogs("chatbot.main", level="ERROR"):
             response = self.client.post("/chat", json={"message": "Hi", "mode": "graphrag"})
         self.assertEqual(response.status_code, 502)
         self.assertIn("graphrag agent could not produce", response.json()["detail"])
 
     def test_service_failure_returns_503_without_internal_details(self):
         self.baseline.ask.side_effect = ConnectionError("neo4j://secret-host:7687 refused")
-        with self.assertLogs("chatbot.chat_bot_main", level="ERROR") as logs:
+        with self.assertLogs("chatbot.main", level="ERROR") as logs:
             response = self.client.post("/chat", json={"message": "Hi"})
         self.assertEqual(response.status_code, 503)
         self.assertIn("database MCP server is running", response.json()["detail"])
@@ -122,7 +122,7 @@ class TestChatApi(unittest.TestCase):
 
     def test_database_mcp_failure_returns_503(self):
         self.baseline.ask.side_effect = DatabaseMcpError("private MCP transport detail")
-        with self.assertLogs("chatbot.chat_bot_main", level="ERROR") as logs:
+        with self.assertLogs("chatbot.main", level="ERROR") as logs:
             response = self.client.post("/chat", json={"message": "Hi"})
         self.assertEqual(response.status_code, 503)
         self.assertIn("database MCP server is running", response.json()["detail"])

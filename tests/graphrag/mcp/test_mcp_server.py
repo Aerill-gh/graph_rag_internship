@@ -109,7 +109,7 @@ class TestRetrievalAdapter(unittest.TestCase):
                 "score": 0.9,
             },
         ]
-        with patch.dict("sys.modules", {"chatbot.tools": retrieval}):
+        with patch.dict("sys.modules", {"graphrag.tools": retrieval}):
             self.assertEqual(retrieve_documents("Example question"), [PASSAGE])
         retrieval.search_documents.assert_called_once_with("Example question")
 

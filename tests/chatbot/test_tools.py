@@ -2,9 +2,9 @@ import inspect
 import unittest
 from unittest.mock import patch
 
-from chatbot import tools as chatbot_tools
-from chatbot.tools import run_graph_tool, search_documents
-from database_mcp.contracts import (
+from graphrag import tools as chatbot_tools
+from graphrag.tools import run_graph_tool, search_documents
+from graphrag.database_mcp.contracts import (
     EntityCandidate,
     ExploreEntityResponse,
     FindEntitiesResponse,
@@ -17,8 +17,8 @@ from database_mcp.contracts import (
 
 class SearchDocumentsTests(unittest.TestCase):
     def setUp(self):
-        embedding_patch = patch("chatbot.tools.generate_embedding")
-        client_patch = patch("chatbot.tools.DatabaseMcpClient")
+        embedding_patch = patch("graphrag.tools.generate_embedding")
+        client_patch = patch("graphrag.tools.DatabaseMcpClient")
         self.embed = embedding_patch.start()
         self.client_factory = client_patch.start()
         self.addCleanup(embedding_patch.stop)

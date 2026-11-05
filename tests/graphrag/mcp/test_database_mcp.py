@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import socket
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -8,13 +9,14 @@ from unittest.mock import Mock, patch
 import uvicorn
 from anyio import to_thread
 from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.memory import create_connected_server_and_client_session
 from mcp.types import CallToolResult, TextContent
 from pydantic import ValidationError
 
-from database_mcp.client import DatabaseMcpClient
-from database_mcp.config import load_database_settings
-from database_mcp.contracts import (
+from graphrag.database_mcp.client import DatabaseMcpClient
+from graphrag.database_mcp.config import load_database_settings
+from graphrag.database_mcp.contracts import (
     EMBEDDING_DIMENSIONS,
     ChunkPayload,
     ChunkReadResponse,
@@ -33,7 +35,7 @@ from database_mcp.contracts import (
     SearchDocumentsResponse,
     SearchPassage,
 )
-from database_mcp.server import DatabaseBackend, create_mcp_server
+from graphrag.main import DatabaseBackend, create_mcp_server
 
 
 CHUNK = {
@@ -119,7 +121,7 @@ class ContractTests(unittest.TestCase):
                 })
 
     def test_database_configuration_does_not_fall_back_to_shared_credentials(self):
-        with patch("database_mcp.config.dotenv_values", return_value={}):
+        with patch("graphrag.database_mcp.config.dotenv_values", return_value={}):
             with self.assertRaisesRegex(RuntimeError, "env.database-mcp"):
                 load_database_settings()
 
@@ -261,6 +263,84 @@ class McpServerTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(task, timeout=10)
 
 
+class ConcurrentMcpSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_concurrent_http_sessions_use_separate_database_backends(self):
+        class LifecycleBackend:
+            def __init__(self):
+                self.is_open = False
+                self.open_count = 0
+                self.close_count = 0
+
+            def open(self):
+                if self.is_open:
+                    raise RuntimeError("Database backend is already open.")
+                self.is_open = True
+                self.open_count += 1
+                time.sleep(0.05)
+
+            def close(self):
+                self.is_open = False
+                self.close_count += 1
+
+            def health_check(self):
+                return HealthResponse()
+
+        backends = []
+
+        def create_backend(_configuration):
+            backend = LifecycleBackend()
+            backends.append(backend)
+            return backend
+
+        with (
+            patch(
+                "graphrag.database_mcp.config.load_database_settings",
+                return_value=Mock(),
+            ),
+            patch(
+                "graphrag.database_mcp.neo4j_backend.Neo4jBackend",
+                side_effect=create_backend,
+            ),
+        ):
+            server = create_mcp_server()
+            sock = socket.socket()
+            sock.bind(("127.0.0.1", 0))
+            sock.listen()
+            self.addCleanup(sock.close)
+            port = sock.getsockname()[1]
+            uvicorn_server = uvicorn.Server(uvicorn.Config(
+                server.streamable_http_app(), log_level="warning",
+            ))
+            task = asyncio.create_task(uvicorn_server.serve(sockets=[sock]))
+            try:
+                async with asyncio.timeout(10):
+                    while not uvicorn_server.started:
+                        if task.done():
+                            await task
+                            self.fail("MCP server exited before startup.")
+                        await asyncio.sleep(0.01)
+
+                async def call_health_check():
+                    async with streamable_http_client(
+                        f"http://127.0.0.1:{port}/mcp",
+                    ) as (read, write, _):
+                        async with ClientSession(read, write) as session:
+                            await session.initialize()
+                            result = await session.call_tool("health_check", {})
+                            self.assertFalse(result.isError)
+
+                await asyncio.gather(call_health_check(), call_health_check())
+            finally:
+                uvicorn_server.should_exit = True
+                await asyncio.wait_for(task, timeout=10)
+
+        self.assertEqual(len(backends), 2)
+        for backend in backends:
+            self.assertEqual(backend.open_count, 1)
+            self.assertEqual(backend.close_count, 1)
+            self.assertFalse(backend.is_open)
+
+
 class ClientResponseTests(unittest.TestCase):
     def client(self, result: CallToolResult) -> DatabaseMcpClient:
         client = DatabaseMcpClient("http://127.0.0.1:8002/mcp")
@@ -289,14 +369,14 @@ class ClientResponseTests(unittest.TestCase):
 
 class IngestionBoundaryTests(unittest.TestCase):
     def test_ingestion_has_no_driver_imports_or_credential_access(self):
-        root = Path(__file__).resolve().parents[2]
+        root = Path(__file__).resolve().parents[3]
         files = (
             root / "src" / "graphrag" / "build_graph.py",
             root / "src" / "graphrag" / "run_pipeline.py",
             root / "src" / "graphrag" / "components.py",
             root / "src" / "graphrag" / "check_config.py",
-            root / "src" / "Neo4j" / "ingest_neo4j.py",
-            root / "src" / "database_mcp" / "client.py",
+            root / "src" / "graphrag" / "Neo4j" / "ingest_neo4j.py",
+            root / "src" / "graphrag" / "database_mcp" / "client.py",
         )
         for path in files:
             source = path.read_text(encoding="utf-8")
@@ -305,7 +385,8 @@ class IngestionBoundaryTests(unittest.TestCase):
                 for node in ast.walk(tree):
                     if isinstance(node, ast.ImportFrom):
                         self.assertNotIn(node.module, {
-                            "neo4j", "Neo4j.neo4j_store", "database_mcp.neo4j_backend",
+                            "neo4j", "graphrag.Neo4j.neo4j_store",
+                            "graphrag.database_mcp.neo4j_backend",
                         })
                     elif isinstance(node, ast.Import):
                         self.assertFalse(any(
@@ -321,13 +402,12 @@ class IngestionBoundaryTests(unittest.TestCase):
 
 class ServiceAccessBoundaryTests(unittest.TestCase):
     def test_chatbot_graphrag_evaluation_and_client_use_only_database_mcp(self):
-        root = Path(__file__).resolve().parents[2]
+        root = Path(__file__).resolve().parents[3]
         files = (
             root / "src" / "chatbot" / "agent.py",
-            root / "src" / "chatbot" / "chat_bot_main.py",
-            root / "src" / "chatbot" / "tools.py",
+            root / "src" / "chatbot" / "main.py",
             root / "src" / "chatbot" / "mcp_server.py",
-            root / "src" / "database_mcp" / "client.py",
+            root / "src" / "graphrag" / "database_mcp" / "client.py",
             root / "src" / "graphrag" / "tools.py",
             root / "src" / "graphrag" / "graph_tools.py",
             root / "src" / "graphrag" / "config.py",
@@ -340,7 +420,8 @@ class ServiceAccessBoundaryTests(unittest.TestCase):
                 for node in ast.walk(tree):
                     if isinstance(node, ast.ImportFrom):
                         self.assertNotIn(node.module, {
-                            "neo4j", "Neo4j.neo4j_store", "database_mcp.neo4j_backend",
+                            "neo4j", "graphrag.Neo4j.neo4j_store",
+                            "graphrag.database_mcp.neo4j_backend",
                         })
                     elif isinstance(node, ast.Import):
                         self.assertFalse(any(

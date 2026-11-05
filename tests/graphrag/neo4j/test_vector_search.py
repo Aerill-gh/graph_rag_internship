@@ -1,5 +1,5 @@
 
-from database_mcp.client import DatabaseMcpClient
+from graphrag.database_mcp.client import DatabaseMcpClient
 from graphrag.models import generate_embedding
 
 

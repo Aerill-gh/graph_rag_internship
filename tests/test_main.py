@@ -173,7 +173,7 @@ class ServiceSettingsTests(unittest.TestCase):
 
 class ServiceBootstrapTests(unittest.TestCase):
     def test_api_services_use_the_existing_apps(self):
-        for name, module in (("chatbot", "chatbot.chat_bot_main"), ("graphrag", "graphrag.ingestion_api")):
+        for name, module in (("chatbot", "chatbot.main"), ("graphrag", "graphrag.ingestion_api")):
             fake_module = MagicMock()
             with self.subTest(service=name), patch.dict(sys.modules, {module: fake_module}):
                 with patch("uvicorn.run") as run:
@@ -181,7 +181,7 @@ class ServiceBootstrapTests(unittest.TestCase):
                 run.assert_called_once_with(fake_module.app, host="127.0.0.1", port=8100, log_config=None)
 
     def test_mcp_uses_the_existing_factory_and_http_lifespan(self):
-        with patch("graphrag.database_mcp.server.create_mcp_server") as create:
+        with patch("graphrag.main.create_mcp_server") as create:
             with patch("uvicorn.run") as run:
                 launcher.run_service(launcher.Service("mcp", 8102))
         create.assert_called_once_with()

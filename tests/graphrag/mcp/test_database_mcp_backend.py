@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from database_mcp.config import DatabaseSettings
-from database_mcp.contracts import (
+from graphrag.database_mcp.config import DatabaseSettings
+from graphrag.database_mcp.contracts import (
     ChunkWrite,
     CorpusSummaryResponse,
     ExploreEntityRequest,
@@ -10,7 +10,7 @@ from database_mcp.contracts import (
     QueryGraphRequest,
     SearchDocumentsRequest,
 )
-from database_mcp.neo4j_backend import Neo4jBackend
+from graphrag.database_mcp.neo4j_backend import Neo4jBackend
 
 
 CHUNK = {
@@ -83,7 +83,7 @@ class BackendTests(unittest.TestCase):
     def test_driver_lifecycle_and_connectivity(self):
         self.backend.close()
         self.driver.close.assert_called_once()
-        with patch("database_mcp.neo4j_backend.GraphDatabase.driver", return_value=self.driver):
+        with patch("graphrag.database_mcp.neo4j_backend.GraphDatabase.driver", return_value=self.driver):
             self.backend.open()
             self.backend.health_check()
         self.driver.verify_connectivity.assert_called_once()

@@ -5,19 +5,19 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
 from chatbot.agent import AgentAnswer
-from graphrag.ask import main
+from chatbot.ask import main
 
 
 class AskCliTests(unittest.TestCase):
     def test_graph_mode_selects_graph_agent(self):
-        with patch("graphrag.ask.GraphRAGAgent") as graph_agent, redirect_stdout(io.StringIO()):
+        with patch("chatbot.ask.GraphRAGAgent") as graph_agent, redirect_stdout(io.StringIO()):
             graph_agent.return_value.ask.return_value = AgentAnswer("No evidence.", [], 1, ["query_graph"])
             self.assertEqual(main(["Question", "--mode", "graphrag", "--json"]), 0)
             graph_agent.return_value.ask.assert_called_once_with("Question")
             self.agent_class.assert_not_called()
 
     def setUp(self):
-        agent_patch = patch("graphrag.ask.BaselineAgent")
+        agent_patch = patch("chatbot.ask.BaselineAgent")
         self.agent_class = agent_patch.start()
         self.addCleanup(agent_patch.stop)
         self.agent_class.return_value.ask.return_value = AgentAnswer(

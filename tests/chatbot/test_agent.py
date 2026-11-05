@@ -8,6 +8,7 @@ from chatbot.agent import (
 )
 from chatbot.languages import NOT_FOUND_RESPONSES
 from graphrag.config import FoundrySettings
+from graphrag.database_mcp.contracts import SearchDocumentsResponse, SearchPassage
 
 
 def make_response(text="", calls=(), status="completed"):
@@ -31,7 +32,8 @@ class BaselineAgentTests(unittest.TestCase):
         self.client.responses.create.side_effect = [
             make_response(calls=[graph_call]), make_response("The plan covers fitness [S1]."),
         ]
-        with patch("chatbot.agent.run_graph_tool", return_value={"passages": self.search.return_value}):
+        passage = self.search.return_value.passages[0].model_dump()
+        with patch("chatbot.agent._run_graph_tool_via_mcp", return_value={"passages": [passage]}):
             result = GraphRAGAgent(self.configuration).ask("What does PerksPlus cover?")
         self.assertEqual(result.tools_used, ["explore_entity"])
         definition = self.project.agents.create_version.call_args.kwargs["definition"]
@@ -47,7 +49,7 @@ class BaselineAgentTests(unittest.TestCase):
             make_response(calls=[graph_call]), make_response(calls=[make_search_call()]),
             make_response("An answer [S1]."),
         ]
-        with patch("chatbot.agent.run_graph_tool", return_value={"passages": []}):
+        with patch("chatbot.agent._run_graph_tool_via_mcp", return_value={"passages": []}):
             result = GraphRAGAgent(self.configuration).ask("Question")
         self.assertEqual(result.tools_used, ["explore_entity", "search_documents"])
 
@@ -59,13 +61,16 @@ class BaselineAgentTests(unittest.TestCase):
     def setUp(self):
         project_patch = patch("chatbot.agent.AIProjectClient")
         credential_patch = patch("chatbot.agent.DefaultAzureCredential")
-        search_patch = patch("chatbot.agent.search_documents")
+        embedding_patch = patch("chatbot.agent.generate_embedding", return_value=[0.1] * 1536)
+        client_patch = patch("chatbot.agent.DatabaseMcpClient")
         self.project_class = project_patch.start()
         credential_patch.start()
-        self.search = search_patch.start()
+        embedding_patch.start()
+        self.client_factory = client_patch.start()
         self.addCleanup(project_patch.stop)
         self.addCleanup(credential_patch.stop)
-        self.addCleanup(search_patch.stop)
+        self.addCleanup(embedding_patch.stop)
+        self.addCleanup(client_patch.stop)
 
         self.project = self.project_class.return_value.__enter__.return_value
         self.project.agents.create_version.return_value = SimpleNamespace(
@@ -73,11 +78,12 @@ class BaselineAgentTests(unittest.TestCase):
         )
         self.client = self.project.get_openai_client.return_value.__enter__.return_value
         self.client.conversations.create.return_value = SimpleNamespace(id="conversation-1")
-        self.search.return_value = [{
-            "chunk_id": "chunk-1", "source_document": "role_library.pdf",
-            "pages": [2], "text": "Engineer requires Python.", "score": 0.9,
-            "figures": [],
-        }]
+        self.database = self.client_factory.return_value.__enter__.return_value
+        self.search = self.database.search_documents
+        self.search.return_value = SearchDocumentsResponse(passages=[SearchPassage(
+            chunk_id="chunk-1", source_document="role_library.pdf", pages=[2],
+            text="Engineer requires Python.", score=0.9,
+        )])
         self.configuration = FoundrySettings(
             "https://example.services.ai.azure.com/api/projects/demo", "chat-deployment"
         )
@@ -105,7 +111,7 @@ class BaselineAgentTests(unittest.TestCase):
         )
 
     def test_empty_search_abstains(self):
-        self.search.return_value = []
+        self.search.return_value = SearchDocumentsResponse(passages=[])
         self.client.responses.create.return_value = make_response(
             calls=[make_search_call()]
         )
@@ -114,7 +120,7 @@ class BaselineAgentTests(unittest.TestCase):
         self.assertEqual(result.sources, [])
 
     def test_selected_language_updates_instructions_and_not_found_response(self):
-        self.search.return_value = []
+        self.search.return_value = SearchDocumentsResponse(passages=[])
         self.client.responses.create.return_value = make_response(calls=[make_search_call()])
 
         result = self.agent.ask("Welche Leistungen?", language="de")

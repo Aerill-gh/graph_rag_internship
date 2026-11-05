@@ -15,7 +15,7 @@ from chatbot.agent import (
     BaselineAgent, GraphRAGAgent, NOT_FOUND, BASELINE_INSTRUCTIONS, GRAPHRAG_INSTRUCTIONS,
 )
 from graphrag.config import PROJECT_ROOT, settings
-from database_mcp.client import DatabaseMcpClient
+from graphrag.database_mcp.client import DatabaseMcpClient
 
 
 JUDGE_INSTRUCTIONS = """
