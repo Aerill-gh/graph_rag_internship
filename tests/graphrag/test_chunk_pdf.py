@@ -13,6 +13,7 @@ from pypdf import PdfReader, PdfWriter
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 chunk_pdf = import_module("graphrag.documents")
+chunk_cli = import_module("graphrag.chunk_pdf")
 
 
 class AnalyzeBatchTests(unittest.TestCase):
@@ -123,6 +124,92 @@ class ChunkTests(unittest.TestCase):
             "# Title", "## First\nHello", "## Second\nWorld"
         ])
         self.assertTrue(all(chunk["pages"] == [] for chunk in chunks))
+        self.assertEqual(
+            [chunk["chunk_id"] for chunk in chunks],
+            ["folder_test_001", "folder_test_002", "folder_test_003"],
+        )
+        self.assertTrue(all(chunk["source_document"] == "folder/test.md" for chunk in chunks))
+
+    def test_document_names_keep_existing_chunk_prefixes_and_output_paths(self):
+        for source, prefix in (
+            ("role_library.pdf", "role_library"),
+            ("Zava_Company_Overview.md", "Zava_Company_Overview"),
+            ("folder/test.pdf", "folder_test"),
+            (r"folder\test.pdf", "folder_test"),
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(chunk_pdf.chunk_prefix_for_document(source), prefix)
+        self.assertEqual(
+            chunk_pdf.output_path_for_document("role_library.pdf"),
+            chunk_pdf.OUTPUT_DIR / "role_library_chunks.json",
+        )
+        self.assertEqual(
+            chunk_pdf.output_path_for_document("folder/test.pdf"),
+            chunk_pdf.OUTPUT_DIR / "folder" / "test_chunks.json",
+        )
+
+
+class ChunkCliTests(unittest.TestCase):
+    def setUp(self):
+        self.output_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(chunk_pdf, "OUTPUT_DIR", self.output_dir))
+        self.loader = self.enterContext(patch.object(chunk_cli, "LocalDocumentLoader"))
+        self.loader.return_value.load.return_value = b"# Zava\nCompany overview."
+
+    def test_markdown_reads_local_file_and_preserves_citations(self):
+        with patch.object(chunk_cli, "create_pdf_chunks") as pdf_chunks:
+            chunk_cli.process_document("Zava_Company_Overview.md", None)
+        self.loader.return_value.load.assert_called_once_with("Zava_Company_Overview.md")
+        pdf_chunks.assert_not_called()
+        chunks = json.loads(
+            (self.output_dir / "Zava_Company_Overview_chunks.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(chunks[0]["chunk_id"], "Zava_Company_Overview_001")
+        self.assertEqual(chunks[0]["source_document"], "Zava_Company_Overview.md")
+
+    def test_pdf_passes_local_bytes_and_source_to_existing_parser(self):
+        credential = object()
+        self.loader.return_value.load.return_value = b"PDF bytes"
+        with patch.object(chunk_cli, "create_pdf_chunks", return_value=(
+            [{"chunk_id": "role_library_001", "source_document": "role_library.pdf"}], 0,
+        )) as pdf_chunks:
+            chunk_cli.process_document("role_library.pdf", credential)
+        pdf_chunks.assert_called_once_with(b"PDF bytes", "role_library.pdf", credential)
+        self.assertTrue((self.output_dir / "role_library_chunks.json").is_file())
+
+    def test_unsupported_file_does_not_write_output(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported document type"):
+            chunk_cli.process_document("example.txt", None)
+        self.assertEqual(list(self.output_dir.iterdir()), [])
+
+    @patch("graphrag.chunk_pdf.process_document")
+    @patch("graphrag.chunk_pdf.DefaultAzureCredential")
+    def test_cli_processes_multiple_relative_documents(self, credential, process):
+        chunk_cli.main([
+            "--document", "Zava_Company_Overview.md",
+            "--document", "role_library.pdf",
+        ])
+        self.assertEqual(
+            [call.args for call in process.call_args_list],
+            [
+                ("Zava_Company_Overview.md", credential.return_value),
+                ("role_library.pdf", credential.return_value),
+            ],
+        )
+        credential.return_value.close.assert_called_once()
+
+    @patch("graphrag.chunk_pdf.process_document")
+    @patch("graphrag.chunk_pdf.DefaultAzureCredential")
+    def test_cli_default_preserves_role_library(self, credential, process):
+        chunk_cli.main([])
+        process.assert_called_once_with("role_library.pdf", credential.return_value)
+
+    @patch("graphrag.chunk_pdf.process_document", side_effect=FileNotFoundError("missing.pdf"))
+    @patch("graphrag.chunk_pdf.DefaultAzureCredential")
+    def test_cli_file_error_is_propagated_and_credential_closed(self, credential, process):
+        with self.assertRaises(FileNotFoundError):
+            chunk_cli.main(["--document", "missing.pdf"])
+        credential.return_value.close.assert_called_once()
 
 
 if __name__ == "__main__":

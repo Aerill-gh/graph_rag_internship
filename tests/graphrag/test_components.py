@@ -1,11 +1,13 @@
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
 from unittest.mock import patch
 
 from graphrag.components import (
+    LocalDocumentLoader,
     ZavaChunkEmbedder,
     McpChunkLoader,
 )
@@ -14,8 +16,51 @@ from graphrag.components import (
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from graphrag.components import ZavaDocumentParser, ZavaDocumentSplitter
-from graphrag.pipeline import ParsedDocument
+from graphrag.pipeline import DocumentSource, ParsedDocument
 from graphrag.pipeline import Chunk
+
+
+class TestLocalDocumentLoader(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.storage = self.root / "document_storage"
+        self.storage.mkdir()
+        self.loader = LocalDocumentLoader(self.storage)
+        (self.storage / "role_library.pdf").write_bytes(b"PDF bytes")
+
+    def test_reads_relative_document(self):
+        self.assertEqual(self.loader.load("role_library.pdf"), b"PDF bytes")
+
+    def test_reads_document_source_location(self):
+        source = DocumentSource(name="role_library.pdf", location="role_library.pdf")
+        self.assertEqual(self.loader.load(source), b"PDF bytes")
+
+    def test_reads_nested_document(self):
+        (self.storage / "folder").mkdir()
+        (self.storage / "folder" / "overview.md").write_bytes(b"# Zava")
+        self.assertEqual(self.loader.load("folder/overview.md"), b"# Zava")
+
+    def test_in_memory_document_does_not_read_file(self):
+        source = DocumentSource(name="overview.md", content=b"# Zava")
+        with patch.object(Path, "read_bytes") as read_bytes:
+            self.assertEqual(self.loader.load(source), b"# Zava")
+        read_bytes.assert_not_called()
+
+    def test_missing_document_raises(self):
+        with self.assertRaises(FileNotFoundError):
+            self.loader.load("missing.pdf")
+
+    def test_rejects_absolute_and_parent_paths(self):
+        for location in ("../outside.pdf", str(self.storage / "role_library.pdf")):
+            with self.subTest(location=location):
+                with self.assertRaisesRegex(ValueError, "inside local document storage"):
+                    self.loader.load(location)
+
+    def test_rejects_empty_or_invalid_location(self):
+        for source in ("", " ", DocumentSource(name="test.pdf", location=42)):
+            with self.subTest(source=source):
+                with self.assertRaisesRegex(ValueError, "relative file path"):
+                    self.loader.load(source)
 
 
 class TestZavaDocumentParser(unittest.TestCase):

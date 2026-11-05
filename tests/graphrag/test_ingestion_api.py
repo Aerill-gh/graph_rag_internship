@@ -36,15 +36,11 @@ class IngestionApiTests(unittest.TestCase):
                 "figures": [],
             })
         )
-        self.blob = self.enterContext(patch("graphrag.components.BlobClient"))
         self.client = self.enterContext(TestClient(ingestion_api.app))
         self.markdown_name = "Zava_Company_Overview.md"
         (self.root / self.markdown_name).write_text(
             "# Zava\nEngineer requires Python.", encoding="utf-8",
         )
-
-    def tearDown(self):
-        self.blob.assert_not_called()
 
     def test_database_backend_imports_real_storage_helpers(self):
         from graphrag.database_mcp import neo4j_backend

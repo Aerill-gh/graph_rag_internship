@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from graphrag.run_pipeline import main
+from graphrag.components import LocalDocumentLoader
+from graphrag.pipeline import DocumentSource
 
 
 class TestRunPipeline(unittest.TestCase):
@@ -14,7 +16,7 @@ class TestRunPipeline(unittest.TestCase):
     @patch("graphrag.run_pipeline.CompositeDocumentProcessingPipeline")
     @patch("graphrag.run_pipeline.DatabaseMcpClient")
     @patch("graphrag.run_pipeline.DefaultAzureCredential")
-    @patch("sys.argv", ["run_pipeline.py", "--blob", "role_library.pdf"])
+    @patch("sys.argv", ["run_pipeline.py", "--document", "role_library.pdf"])
     def test_main_connects_components(
         self,
         mock_credential_class,
@@ -31,15 +33,19 @@ class TestRunPipeline(unittest.TestCase):
         self.assertIs(
             mock_pipeline_class.call_args.kwargs["chunk_loader"].client, client,
         )
+        self.assertIsInstance(
+            mock_pipeline_class.call_args.kwargs["document_loader"],
+            LocalDocumentLoader,
+        )
         mock_pipeline_class.return_value.load_document.assert_called_once_with(
-            "role_library.pdf"
+            DocumentSource(name="role_library.pdf", location="role_library.pdf")
         )
         mock_credential_class.return_value.close.assert_called_once()
 
     @patch("graphrag.run_pipeline.CompositeDocumentProcessingPipeline")
     @patch("graphrag.run_pipeline.DatabaseMcpClient")
     @patch("graphrag.run_pipeline.DefaultAzureCredential")
-    @patch("sys.argv", ["run_pipeline.py", "--blob", "role_library.pdf"])
+    @patch("sys.argv", ["run_pipeline.py", "--document", "role_library.pdf"])
     def test_mcp_failure_closes_azure_credential(
         self, credential, client_factory, pipeline,
     ):
@@ -50,6 +56,20 @@ class TestRunPipeline(unittest.TestCase):
             main()
         pipeline.assert_not_called()
         credential.return_value.close.assert_called_once()
+
+    @patch("graphrag.run_pipeline.CompositeDocumentProcessingPipeline")
+    @patch("graphrag.run_pipeline.DatabaseMcpClient")
+    @patch("graphrag.run_pipeline.DefaultAzureCredential")
+    @patch("sys.argv", ["run_pipeline.py", "--document", r"folder\role_library.pdf"])
+    def test_nested_source_uses_stable_relative_name(
+        self, credential, client_factory, pipeline,
+    ):
+        main()
+        pipeline.return_value.load_document.assert_called_once_with(
+            DocumentSource(
+                name="folder/role_library.pdf", location=r"folder\role_library.pdf",
+            )
+        )
 
 
 if __name__ == "__main__":
