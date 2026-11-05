@@ -5,6 +5,7 @@
 # Local project configuration
 src/graphrag/__init__.py
 src/graphrag/config.py
+src/data
 
 # Data (downloaded or generated, not versioned)
 /document_storage/
