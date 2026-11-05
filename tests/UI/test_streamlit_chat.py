@@ -6,8 +6,8 @@ from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
 from chatbot.languages import LANGUAGE_NAMES
-from UI import streamlit_chat
-from UI.locales import TEXT, error_text
+from ui import streamlit_chat
+from ui.locales import TEXT, error_text
 
 
 class TestChatApiClient(unittest.TestCase):

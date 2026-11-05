@@ -1,6 +1,7 @@
 import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -613,7 +614,7 @@ def _main() -> None:
 
     with st.sidebar:
         with st.container(key="sidebar_logo"):
-            st.image(str(PROJECT_ROOT / "UI" / "assets" / "zava_logo.png"), width="stretch")
+            st.image(str(Path(__file__).resolve().parent / "assets" / "zava_logo.png"), width="stretch")
         st.caption(text("sidebar_intro", language))
         # Same agent and instructions in both modes; GraphRAG only adds graph tools.
         mode = st.radio(
