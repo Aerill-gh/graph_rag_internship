@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from chatbot.agent import BaselineAgent, GraphRAGAgent, HistoryMessage
 from chatbot.chat_store import ChatStore
+from chatbot.config import get_rest_api_port
 from chatbot.languages import DEFAULT_LANGUAGE, LANGUAGE_NAMES, Language
 from graphrag.database_mcp.client import DatabaseMcpError
 
@@ -233,4 +234,4 @@ def get_languages() -> dict:
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=get_rest_api_port())

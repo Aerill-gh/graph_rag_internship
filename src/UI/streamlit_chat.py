@@ -1,29 +1,28 @@
 import json
 import logging
-import os
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import streamlit as st
-from dotenv import load_dotenv
 
 # Handle imports both from src/ and root directory
 try:
+    from ui.config import get_chatbot_api_url, get_backend_api_url
     from ui.locales import error_text, text
 except ModuleNotFoundError:
-    from locales import error_text, text
+    try:
+        from UI.config import get_chatbot_api_url, get_backend_api_url
+        from UI.locales import error_text, text
+    except ModuleNotFoundError:
+        from config import get_chatbot_api_url, get_backend_api_url
+        from locales import error_text, text
 
 # Language type definition (same as chatbot but no import from chatbot)
 Language = Literal["en", "de", "lv", "es"]
 DEFAULT_LANGUAGE: Language = "en"
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CHAT_API_URL = "http://127.0.0.1:8000/chat"
-DEFAULT_BACKEND_API_URL = "http://127.0.0.1:8000"
 REQUEST_TIMEOUT_SECONDS = 120
 SOURCES_SEPARATOR = "\n\nSources:\n"
 AGENT_MODES = ("baseline", "graphrag")
@@ -65,18 +64,6 @@ class Conversation:
     title: str
     pinned: bool
     language: Language = DEFAULT_LANGUAGE
-
-
-def get_chat_api_url() -> str:
-    """Load the project .env and return the configured chatbot API endpoint."""
-    load_dotenv(PROJECT_ROOT / ".env")
-    return os.getenv("CHATBOT_API_URL", DEFAULT_CHAT_API_URL).strip() or DEFAULT_CHAT_API_URL
-
-
-def get_backend_api_url() -> str:
-    """Load the project .env and return the configured backend API endpoint."""
-    load_dotenv(PROJECT_ROOT / ".env")
-    return os.getenv("BACKEND_API_URL", DEFAULT_BACKEND_API_URL).strip() or DEFAULT_BACKEND_API_URL
 
 
 def _make_backend_request(
@@ -280,7 +267,7 @@ def chat_with_bot(
         body["conversation_id"] = conversation_id
     try:
         request = Request(
-            endpoint or get_chat_api_url(),
+            endpoint or get_chatbot_api_url(),
             data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             method="POST",

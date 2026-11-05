@@ -155,16 +155,15 @@ class TestChatApiClient(unittest.TestCase):
         with self.assertRaisesRegex(streamlit_chat.ChatServiceError, "address is invalid"):
             streamlit_chat.chat_with_bot("Hello", "not a valid endpoint")
 
-    def test_env_endpoint_and_default(self):
-        with patch.object(streamlit_chat, "load_dotenv") as load_dotenv:
+    def test_env_endpoint_is_required(self):
+        with patch("ui.config.load_dotenv") as load_dotenv:
             with patch.dict(os.environ, {"CHATBOT_API_URL": "http://localhost:9000/chat"}):
                 self.assertEqual(
-                    streamlit_chat.get_chat_api_url(), "http://localhost:9000/chat",
+                    streamlit_chat.get_chatbot_api_url(), "http://localhost:9000/chat",
                 )
             with patch.dict(os.environ, {}, clear=True):
-                self.assertEqual(
-                    streamlit_chat.get_chat_api_url(), streamlit_chat.DEFAULT_CHAT_API_URL,
-                )
+                with self.assertRaisesRegex(RuntimeError, "CHATBOT_API_URL"):
+                    streamlit_chat.get_chatbot_api_url()
             self.assertEqual(load_dotenv.call_count, 2)
 
 
