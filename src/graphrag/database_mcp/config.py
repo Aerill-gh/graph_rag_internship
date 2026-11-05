@@ -18,6 +18,28 @@ class DatabaseSettings:
     database: str = "neo4j"
 
 
+@dataclass(frozen=True)
+class Neo4jDesktopSettings:
+    home: Path
+    dbms_path: Path | None = None
+    java_home: Path | None = None
+
+
+def load_neo4j_desktop_settings() -> Neo4jDesktopSettings:
+    values = dotenv_values(PROJECT_ROOT / ".env.database-mcp")
+
+    def optional_path(name: str) -> Path | None:
+        value = os.getenv(name) or values.get(name)
+        return Path(value).expanduser() if value else None
+
+    home = optional_path("NEO4J_DESKTOP_HOME") or Path.home() / ".Neo4jDesktop2"
+    return Neo4jDesktopSettings(
+        home=home,
+        dbms_path=optional_path("NEO4J_DESKTOP_DBMS_PATH"),
+        java_home=optional_path("NEO4J_JAVA_HOME"),
+    )
+
+
 def load_database_settings() -> DatabaseSettings:
     values = dotenv_values(PROJECT_ROOT / ".env.database-mcp")
 
