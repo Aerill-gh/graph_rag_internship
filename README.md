@@ -124,6 +124,372 @@ Start the chat UI:
 uv run streamlit run app.py
 ```
 
+### Local document ingestion API
+
+The [ingestion API](src/graphrag/ingestion_api.py) reads the seven sample
+documents from the git-ignored `document_storage/` folder at the repository root.
+It accepts a filename, not a file upload or an arbitrary local path. The API and
+the files must be on the same computer. The API and command-line ingestion tools
+read local files; no application code connects to Azure Blob Storage.
+
+```text
+POST /documents/ingest -> local file -> existing parser and splitter
+  -> build_graph_for_chunks (embeddings, extraction, duplicate merging)
+  -> database MCP service -> Neo4j
+```
+
+This builds both the vector index content and source-backed graph facts. The
+chatbot continues retrieving from the same database; it does not call the
+ingestion API. PDF parsing still uses Azure Document Intelligence. Embeddings
+and graph extraction still use the existing Azure model configuration and caches.
+No new dependencies are required.
+
+The direct `azure-storage-blob` dependency and storage settings have been removed.
+You can remove `STORAGE_ACCOUNT_NAME`, `BLOB_CONTAINER`, and `BLOB_NAME` from your
+local `.env`; they are no longer read. The Blob SDK remains in `uv.lock` only
+because the Foundry `azure-ai-projects` SDK requires it transitively. Keeping it
+installed does not configure or open a Blob connection.
+
+#### Before starting
+
+1. Put the seven original sample documents listed above in `document_storage/`.
+   Keep their original filenames. Do not commit the files.
+2. Keep the existing `.env` settings: `DOCINTEL_ENDPOINT`,
+   `FOUNDRY_PROJECT_ENDPOINT`, `FOUNDRY_CHAT_DEPLOYMENT`,
+   `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_BASE_URL`, and
+   `AZURE_OPENAI_EMBEDDING_DEPLOYMENT`. The current shared embedding settings
+   loader also requires `AZURE_OPENAI_DEPLOYMENT`; retain its existing value.
+   Never paste keys into source code.
+3. Ensure Neo4j is running. The database MCP service reads `NEO4J_URI`,
+   `NEO4J_USERNAME`, `NEO4J_PASSWORD`, and optionally `NEO4J_DATABASE` from
+   `.env.database-mcp`. If that file does not exist, copy
+   `.env.database-mcp.example` and fill it in locally; do not overwrite an
+   existing configuration.
+4. Run all commands below from the repository root.
+
+Prepare the environment:
+
+```powershell
+uv sync
+az login
+```
+
+Terminal 1 - start the existing database MCP service:
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+uv run python -m graphrag.main
+```
+
+Terminal 2 - start the new ingestion API:
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+$env:DATABASE_MCP_URL = "http://127.0.0.1:8002/mcp"
+uv run python -m uvicorn graphrag.ingestion_api:app --host 127.0.0.1 --port 8003 --workers 1
+```
+
+Keep the API local. It has no authentication and can write to the graph.
+Use one worker and one running API instance: its lock rejects overlapping
+ingestions with HTTP 409, but does not coordinate separate processes.
+
+#### Ingest and verify one document
+
+Open `http://127.0.0.1:8003/docs`. `GET /documents` reports the seven supported
+filenames and whether each file is available. `POST /documents/ingest` processes
+one document and waits until it finishes. Start with the Markdown document to
+avoid PDF analysis costs (embeddings and extraction may still incur costs).
+
+Terminal 3:
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:8003/documents"
+
+$body = @{ filename = "Zava_Company_Overview.md" } | ConvertTo-Json
+Invoke-RestMethod `
+    -Method Post `
+    -Uri "http://127.0.0.1:8003/documents/ingest" `
+    -ContentType "application/json" `
+    -Body $body
+```
+
+Success returns `status`, `document`, `chunks`, `entity_mentions`, and
+`relationship_mentions`. Counts come from the graph builder; zero extracted
+facts can be valid if the document has no explicit ontology facts. Chunk IDs and
+source names follow the existing splitter, preserving citations.
+
+Read back the first Markdown chunk through the database MCP service:
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+uv run python -m graphrag.database_mcp.client --chunk-id Zava_Company_Overview_001
+```
+
+Confirm the stored source and embedding metadata, and inspect its graph facts.
+Then ask the existing chatbot a question answered by the document and check its
+citation against the source. Repeat the POST with each of the six PDF filenames
+only after the first document works. PDF processing may take several minutes;
+do not submit another request while the first is running.
+
+Invalid filenames, traversal paths, extra request fields, empty files, and
+unreadable Markdown/PDF inputs are rejected. Missing files return 404; known
+service/file-access errors return 503; processing/validation failures return 502.
+Unexpected failures return 500, never a successful ingestion response. Handled
+service failures log only the exception type, not credentials or connection details.
+
+If ingestion returns a generic 500, inspect both the API terminal and the database
+MCP terminal. An MCP initialization failure happens before document parsing.
+The backend imports persistence helpers from the lowercase package
+`graphrag.neo4j`; an old `graphrag.Neo4j` import fails with `ModuleNotFoundError`.
+After updating server code, restart both services before retrying. On Windows,
+the `python -m uvicorn` command above also avoids the executable launcher error
+`uv trampoline failed to canonicalize script path`.
+
+Ingestion is not one transaction across the entire document: earlier writes may
+remain after a failure or client timeout. Check the API terminal before retrying;
+a disconnected client does not guarantee processing stopped. Existing caches and
+upsert behavior are reused. This API is for the original seven documents, not a
+document replacement/delete workflow: re-ingesting changed documents does not
+guarantee obsolete chunks or facts are removed. It does not write chunk JSON
+exports; graph storage is handled directly through the existing graph builder.
+
+#### Offline tests
+
+The [API tests](tests/graphrag/test_ingestion_api.py) mock Azure and database
+connections, while exercising the real Markdown splitter and a
+graph-builder path with fake embeddings/extractions. They make no paid calls.
+They also import the real database backend to catch storage-package import errors
+without opening a database connection.
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+uv run python -m unittest discover -s .\tests\graphrag -p "test_*ingestion*.py" -v
+```
+
+These are commands to run manually; adding this API does not start services or
+run ingestion automatically.
+
+#### Local command-line ingestion
+
+The old `--blob` option has been replaced by `--document`. Pass a path relative
+to `document_storage/`, not an absolute machine path. Source names retain that
+relative path (using `/` for nested paths); chunk IDs keep the same prefix and
+three-digit numbering, such as `role_library_001`. Keep the original filenames
+and relative paths to preserve existing citations.
+
+Export chunks without writing to Neo4j (PDFs still use Document Intelligence):
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+uv run python -m graphrag.chunk_pdf --document Zava_Company_Overview.md
+# Repeat --document to process more than one file.
+uv run python -m graphrag.chunk_pdf --document role_library.pdf --document Benefit_Options.pdf
+```
+
+Exports go to `data/chunks/`. With no arguments this command processes
+`role_library.pdf`, preserving the previous default. Missing/unreadable files
+and paths outside local storage fail explicitly rather than downloading a file.
+
+The modular pipeline also reads local documents:
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+$env:DATABASE_MCP_URL = "http://127.0.0.1:8002/mcp"
+uv run python -m graphrag.run_pipeline --document Zava_Company_Overview.md
+```
+
+This legacy pipeline writes chunks and embeddings only. Use
+`POST /documents/ingest` for the full graph build, including entity and
+relationship extraction. Both write to the same database.
+
+Check the dependency lockfile, synchronize the environment, then run all
+directly affected offline tests (no Azure or database service is needed):
+
+```powershell
+uv lock --check
+uv sync --locked
+$env:PYTHONPATH = (Resolve-Path .\src).Path + ";" + (Resolve-Path .\tests\graphrag).Path
+uv run python -m unittest test_components test_chunk_pdf test_pipeline test_run_pipeline test_ingestion_api -v
+```
+
+### Local chatbot API
+
+`Chatbot/chat_bot_main.py` is a small FastAPI app with one endpoint, `POST /chat`.
+It does not contain agent logic itself: it passes each question to the team's
+agents in `src/graphrag/chatbot/agent.py`.
+
+- `"mode": "baseline"` (default) uses `BaselineAgent`: plain RAG with only the
+  `search_documents` tool.
+- `"mode": "graphrag"` uses `GraphRAGAgent`: the same instructions and loop plus the
+  graph tools `explore_entity` and `query_graph`.
+
+Because GraphRAG only adds tools to the baseline agent, the two modes stay a fair
+comparison. Both need `FOUNDRY_PROJECT_ENDPOINT`, `FOUNDRY_CHAT_DEPLOYMENT`, Azure
+sign-in, and Neo4j with indexed chunks. GraphRAG also needs the extracted graph;
+until it exists, graph tools return nothing and the agent falls back to document search.
+
+From the repository root (Neo4j must be running):
+
+```powershell
+uv sync
+az login
+# The repository's src/ tree is not installed as a Python package yet.
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+uv run python -m Chatbot.chat_bot_main
+```
+
+Open `http://127.0.0.1:8000/docs` and try `POST /chat` with:
+
+```json
+{"message": "What does PerksPlus cover?", "mode": "graphrag", "history": []}
+```
+
+The response contains the answer with `[S1]` citations, the mode, the cited
+sources, and the tools the agent used:
+
+```json
+{"answer": "... [S1]", "mode": "graphrag",
+ "sources": [{"citation_id": "S1", "source_document": "PerksPlus.pdf",
+              "chunk_id": "PerksPlus_001", "pages": [1]}],
+ "tools_used": ["explore_entity", "search_documents"]}
+```
+
+`history` (optional) holds earlier `user`/`assistant` messages of the same chat, so
+follow-up questions work. Only the last 20 messages are sent to the model. History
+is context only: every turn still searches, and citations must come from that turn.
+Invalid answers return HTTP 502, and unavailable Azure/Neo4j returns HTTP 503 with a
+readable `detail` message. Every question creates and deletes a temporary Foundry
+agent and conversation, as in `scripts/ask.py`.
+
+### Streamlit chatbot UI
+
+Start the chatbot API first (see above), then from the repository root:
+
+```powershell
+uv sync
+uv run streamlit run UI\streamlit_chat.py --server.address 127.0.0.1
+```
+
+Open the local URL printed by Streamlit (usually `http://localhost:8501`).
+Use the top-right menu to select **Light**, **Dark**, or **System**. The chat
+background, text, borders, and accents follow the selected theme.
+The UI sends `{"message": "...", "mode": "...", "history": [...]}` to
+`CHATBOT_API_URL`, defaulting to `http://127.0.0.1:8000/chat`. Set
+`CHATBOT_API_URL` in `.env` only if the API uses a different address. Restart both
+the API and UI after updating to this version.
+
+- The **Agent** switch in the sidebar selects **Baseline** (document search only)
+  or **GraphRAG** (documents + knowledge graph). Each answer shows which agent wrote
+  it, so you can ask the same question in both modes and compare.
+- The **Sources** section under an answer lists the cited documents, pages, and
+  chunks, and the tools the agent used.
+- **New chat** creates a separate conversation. Select a chat in the sidebar to switch.
+- Titles start as **New chat** and automatically use the first question (up to 60
+  characters), without an extra AI call.
+- Open the **three-dot menu** next to a chat for **Pin/Unpin**, **Rename**, or
+  **Delete**. Rename opens a separate name dialog; Delete opens a confirmation
+  dialog and removes that chat's locally saved messages only after confirmation.
+- At most **three** chats can be pinned. Pinned chats appear first; within each
+  group, recently active chats appear first.
+
+Chats, names, pins, messages, and the agent mode of each answer are saved in
+`data/chats/history.sqlite3`, which is git-ignored. They survive browser refreshes
+and app restarts. Older databases are upgraded automatically. This is a local,
+single-user library: all browsers connecting to this app share it. There are no
+accounts or per-user access controls. Messages are stored as plain text on this
+computer, so do not use it for sensitive employee information.
+
+Each UI request includes only the selected chat's saved messages (without their
+Sources blocks), so chats do not share AI memory. Long chats send more context and
+consume more tokens.
+
+Run the offline API, UI, and agent tests (no Azure or Neo4j calls) with:
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+uv run python -m unittest tests.test_chat_api tests.test_streamlit_chat tests.test_saved_chats tests.chatbot.test_agent
+```
+
+### Earlier prototype: `Chatbot/chat_bot.py` and MCP
+
+`Chatbot/chat_bot.py` (`FoundryChatBot`, `LangChainChatBot`) and the MCP server
+below are the first chatbot prototype. The API above no longer uses them; they are
+kept for reference until the team decides to remove them. Their tests are
+`tests/test_chat_bot.py`, `tests/test_foundry_tools.py`, and `tests/test_mcp_server.py`.
+
+### Local MCP document-search server
+
+The chatbot owns the REST endpoint, agent instructions, tool-call loop, MCP client,
+MCP server, answer citations, and the `graphrag.tools.search_documents` tool.
+The RAG team supplies document parsing, embedding helpers, ingestion, and graph
+storage. The MCP server delegates to the search tool.
+
+The flow is: question -> Foundry function call -> MCP document-search tool ->
+passages returned to Foundry -> answer with `[S1]` citations and a source list.
+
+Start the MCP server from the repository root in a separate PowerShell terminal:
+
+```powershell
+# The repository's src/ tree is not installed as a Python package yet.
+$env:PYTHONPATH = (Resolve-Path .\src).Path
+uv run python -m Chatbot.mcp_server
+```
+
+The server binds to `127.0.0.1:8001` and exposes Streamable HTTP at `/mcp`.
+It is local-only and has no authentication; do not expose it to the network.
+Set these values in `.env`, then start the chatbot in another terminal:
+
+```dotenv
+CHATBOT_BACKEND=foundry
+MCP_SERVER_URL=http://127.0.0.1:8001/mcp
+MCP_SEARCH_TOOL=search_documents
+```
+
+The tool accepts `{"question": "..."}` and returns structured content:
+
+```json
+{"passages": [{
+  "chunk_id": "example-chunk",
+  "document": "example.pdf",
+  "pages": [1],
+  "text": "A source passage."
+}]}
+```
+
+The server retains the source fields and omits the retrieval similarity score.
+An empty passages list means no evidence; Markdown may have an empty page list.
+Blank questions, retrieval failures, and malformed results are MCP errors, not
+empty results. Synchronous retrieval runs in a worker thread.
+The client also accepts one text block containing a JSON array of passages.
+
+Set `CHATBOT_BACKEND=foundry`, `MCP_SERVER_URL`, `FOUNDRY_PROJECT_ENDPOINT`, and
+`FOUNDRY_MODEL_NAME` to use this path. Startup fails explicitly without the MCP URL.
+The MCP server must be running before the chatbot starts.
+
+**Retrieval prerequisites:** `graphrag.models` and `graphrag.neo4j_store`
+import `graphrag.config.settings`. This configuration module is currently
+git-ignored: obtain the team's configuration module for a fresh checkout and set
+its required variables in your local `.env`. Retrieval requires embedding
+configuration, Neo4j credentials, indexed chunks, and an online
+`chunk_embedding_index` vector index. MCP startup and tool discovery work without
+retrieval imports; a real search reports an error if its prerequisites are not
+ready. The MCP wrapper does not implement or replace them.
+
+Offline tests mock retrieval and cover tool discovery, validation, errors, source
+preservation, and a real local Streamable HTTP round trip. They make no Azure or
+Neo4j calls. For a live check once retrieval is ready, ask a question with an answer
+you can verify in a source document, then check the passage text, page, and citation.
+The running app never returns fake documents.
+
+The Foundry loop forces a search before answering and permits at most three tool
+calls per message. MCP failures and malformed responses are errors, not empty
+search results. Final answers must cite known source IDs, or explicitly decline
+for insufficient evidence. Source-ID validation does not prove each claim is
+supported: check answers against the actual passages.
+
+A failed turn starts a fresh conversation on the next request. This prototype
+does not automatically delete persisted Foundry conversations.
+
 ### `.env`
 ```env
 NEO4J_URI=bolt://localhost:7687

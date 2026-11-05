@@ -1,19 +1,18 @@
-import os
-
-from dotenv import load_dotenv
 from openai import OpenAI
+
+from graphrag.config import settings
 
 
 def main():
-    load_dotenv()
+    azure_openai = settings.azure_openai
 
     client = OpenAI(
-        api_key=os.environ["AZURE_OPENAI_API_KEY"],
-        base_url=os.environ["AZURE_OPENAI_BASE_URL"],
+        api_key=azure_openai.api_key,
+        base_url=azure_openai.base_url,
     )
 
     response = client.responses.create(
-        model=os.environ["AZURE_OPENAI_DEPLOYMENT"],
+        model=azure_openai.deployment,
         input="Reply with exactly: GPT-4.1 connection successful",
         max_output_tokens=50,
     )

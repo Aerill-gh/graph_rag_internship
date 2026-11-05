@@ -1,9 +1,20 @@
 # Secrets
 .env
+.env.database-mcp
+
+# Local project configuration
+src/graphrag/__init__.py
+src/graphrag/config.py
+src/data
 
 # Data (downloaded or generated, not versioned)
+/document_storage/
 data/raw/
 data/cache/
+data/chunks/
+data/chats/
+# docs
+docs/
 
 # Python
 .venv/

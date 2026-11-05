@@ -13,6 +13,7 @@ def validate_relationship(source, relationship, target):
 if __name__ == "__main__":
     # Test nodes
     print("Employee:", validate_node("Employee"))
+    print("Company:", validate_node("Company"))
     print("Role:", validate_node("Role"))
 
     # Test relationships
@@ -34,4 +35,9 @@ if __name__ == "__main__":
     print(
         "Chunk -> Role:",
         validate_relationship("Chunk", "MENTIONS", "Role")
+    )
+
+    print(
+        "Chunk -> Company:",
+        validate_relationship("Chunk", "MENTIONS", "Company")
     )
